@@ -4,6 +4,37 @@ const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { parseCookieText } = require('./src/cookie-parser');
 
+const FACEBOOK_PARTITION = 'persist:facebook-auth';
+const FACEBOOK_ENTRY_URL = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns/';
+let facebookSession = null;
+let facebookNetworkGuardInstalled = false;
+
+function isAllowedFacebookUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl);
+    if (!['http:', 'https:'].includes(url.protocol)) return true;
+    const host = url.hostname.toLowerCase();
+    return host === 'facebook.com' || host.endsWith('.facebook.com') ||
+      host === 'fb.com' || host.endsWith('.fb.com') ||
+      host === 'facebook.net' || host.endsWith('.facebook.net') ||
+      host.endsWith('.fbcdn.net');
+  } catch (e) {
+    return false;
+  }
+}
+
+function getFacebookSession() {
+  if (!facebookSession) facebookSession = session.fromPartition(FACEBOOK_PARTITION);
+  if (!facebookNetworkGuardInstalled) {
+    facebookNetworkGuardInstalled = true;
+    facebookSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+      callback({ cancel: !isAllowedFacebookUrl(details.url) });
+    });
+    facebookSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+  }
+  return facebookSession;
+}
+
 // Tắt auto download mặc định, chỉ khi user bấm
 autoUpdater.autoDownload = false;
 autoUpdater.autoInstallOnAppQuit = true;
@@ -38,7 +69,7 @@ function createMainWindow() {
     mainWindow.maximize();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (url.includes('facebook.com') || url.includes('fb.com')) shell.openExternal(url);
+    if (isAllowedFacebookUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 }
@@ -55,7 +86,7 @@ app.on('window-all-closed', () => {
 });
 
 async function getAllFacebookCookies() {
-  const ses = session.defaultSession;
+  const ses = getFacebookSession();
   const domains = ['.facebook.com', 'facebook.com', '.fb.com'];
   const map = new Map();
   for (const d of domains) {
@@ -71,14 +102,14 @@ async function clearAllFacebookCookies() {
   for (const cookie of cookies) {
     const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
     try {
-      await session.defaultSession.cookies.remove(`https://${domain}${cookie.path || '/'}`, cookie.name);
+      await getFacebookSession().cookies.remove(`https://${domain}${cookie.path || '/'}`, cookie.name);
     } catch (e) {}
   }
   return cookies.length;
 }
 
 async function setCookiesList(cookies) {
-  const ses = session.defaultSession;
+  const ses = getFacebookSession();
   let success = 0;
   for (const cookie of cookies) {
     const domain = (cookie.domain || '.facebook.com').toLowerCase();
@@ -227,6 +258,7 @@ async function ensureHiddenWindow() {
   hiddenFbWindow = new BrowserWindow({
     width: 1100, height: 800, show: false,
     webPreferences: {
+      partition: FACEBOOK_PARTITION,
       nodeIntegration: false,
       contextIsolation: true,
       backgroundThrottling: false,
@@ -236,10 +268,14 @@ async function ensureHiddenWindow() {
   });
 
   hiddenFbWindow.webContents.on('will-navigate', (e, url) => {
-    if (!url.includes('facebook.com') && !url.includes('fb.com') && !url.includes('facebook.net')) {
+    if (!isAllowedFacebookUrl(url)) {
       e.preventDefault();
     }
   });
+
+  hiddenFbWindow.webContents.setWindowOpenHandler(({ url }) => ({
+    action: isAllowedFacebookUrl(url) ? 'allow' : 'deny'
+  }));
 
   hiddenFbWindow.on('closed', () => {
     hiddenFbWindow = null;
@@ -286,7 +322,7 @@ async function fetchTokenFast() {
 
     try {
       // Load nhanh, bỏ cache nếu cần
-      await win.loadURL('https://www.facebook.com/', { extraHeaders: 'pragma: no-cache\n' });
+      await win.loadURL(FACEBOOK_ENTRY_URL, { extraHeaders: 'pragma: no-cache\n' });
     } catch (e) {
       finish({ success: false, error: e.message });
     }
@@ -357,7 +393,7 @@ ipcMain.handle('login-and-get-token', async (event, cookies) => {
 });
 
 ipcMain.handle('open-facebook-external', async () => {
-  await shell.openExternal('https://www.facebook.com');
+  await shell.openExternal(FACEBOOK_ENTRY_URL);
   return true;
 });
 

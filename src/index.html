@@ -3,6 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none';">
   <title>FB Cookie & Token Tool</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -149,7 +150,7 @@
           <button class="btn-primary" id="loginBtn">Đăng nhập & Lấy Token</button>
           <button class="btn-gray" id="clearBtn">Xóa</button>
         </div>
-        <a href="#" class="link-fb" id="fbLink">Mở Facebook.com</a>
+        <a href="#" class="link-fb" id="fbLink">Mở Ads Manager</a>
 
         <div style="font-size:13px;font-weight:600;color:#606770;margin:14px 0 6px;">2. Import file (batch ngầm)</div>
         <div class="btn-row">
@@ -174,7 +175,7 @@
 
         <div id="status" class="status"></div>
         <div class="warning">
-          ⚠️ Chỉ Facebook • Chạy ngầm • Không gửi server • Chỉ tài khoản của bạn
+          ⚠️ Dữ liệu không gửi server trung gian • Chỉ kết nối Facebook để xác thực • Xử lý cục bộ
         </div>
       </div>
     </div>
