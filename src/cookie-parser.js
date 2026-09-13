@@ -22,6 +22,9 @@
   const COOKIE_TEXT_KEYS = new Set([
     'cookie', 'cookieheader', 'cookie_header', 'set-cookie', 'setcookie', 'rawcookie'
   ]);
+  const FACEBOOK_COOKIE_MARKERS = new Set([
+    'c_user', 'xs', 'fr', 'datr', 'sb', 'wd', 'ps_l', 'ps_n', 'dbln', 'locale'
+  ]);
 
   function isCookieName(name) {
     return !!name && name.length <= MAX_COOKIE_NAME_LENGTH &&
@@ -86,6 +89,7 @@
   function cleanCookieSource(value) {
     let source = unwrapText(value).replace(/^\uFEFF/, '');
     source = source.replace(/\\r\\n|\\n/g, '\n').replace(/\\t/g, '\t');
+    source = source.replace(/\\_/g, '_');
     source = source.replace(/^\s*(?:document\.cookie|cookies?|cookie_header)\s*=\s*/i, '');
     source = source.replace(/(^|\r?\n)\s*(?:set-cookie|cookie)\s*:\s*/gi, '$1');
     source = source.replace(/([,;]\s*)(?:set-cookie|cookie)\s*:\s*/gi, '$1');
@@ -93,6 +97,43 @@
     const embeddedHeader = source.match(/(?:^|\s)(?:set-cookie|cookie)\s*:\s*/i);
     if (embeddedHeader) source = source.slice(embeddedHeader.index + embeddedHeader[0].length);
     return unwrapText(source);
+  }
+
+  function cookieFieldScore(value) {
+    const text = cleanCookieSource(value);
+    if (!text) return -1;
+
+    if ((text.startsWith('{') || text.startsWith('[')) && /"(?:cookies?|cookie_header|set-cookie)"\s*:/i.test(text)) {
+      return 10_000;
+    }
+
+    const pairs = text.match(/(?:^|[;,\s])([!#$%&'*+\-.^_`|~0-9A-Za-z]+)\s*=/g) || [];
+    if (!pairs.length) return -1;
+
+    let markerCount = 0;
+    for (const pair of pairs) {
+      const name = pair.slice(pair.lastIndexOf(' ') + 1).replace(/^[;,]/, '').split('=')[0].trim().toLowerCase();
+      if (FACEBOOK_COOKIE_MARKERS.has(name)) markerCount++;
+    }
+    // Các marker Facebook luôn ưu tiên. Field chỉ có một cặp lẻ không được xem là cookie export.
+    return markerCount ? 1_000 + markerCount * 10 + pairs.length : (pairs.length >= 2 ? pairs.length : -1);
+  }
+
+  function extractCookieSegment(input) {
+    const raw = String(input ?? '').trim();
+    if (!raw.includes('|')) return raw;
+
+    let best = '';
+    let bestScore = -1;
+    for (const part of raw.split('|')) {
+      const score = cookieFieldScore(part);
+      if (score > bestScore) {
+        best = part;
+        bestScore = score;
+      }
+    }
+    // Không nhận fallback là field cuối vì có thể đó là mật khẩu hoặc metadata.
+    return bestScore >= 0 ? best.trim() : '';
   }
 
   function stripValueQuotes(value) {
@@ -277,14 +318,9 @@
     const tableCookies = parseCookieTable(lines);
     if (tableCookies.length) return dedupe(tableCookies);
 
-    let candidate = raw;
-    if (raw.includes('|')) {
-      const parts = raw.split('|');
-      candidate = parts.find(part => /(?:^|[;,\s])(c_user|xs|fr|datr|sb|wd)\s*=/i.test(part)) ||
-        parts.find(part => part.includes('=') && /[;,]/.test(part)) || parts[parts.length - 1];
-    }
+    const candidate = extractCookieSegment(raw);
     return dedupe(parsePairs(candidate));
   }
 
-  return { parseCookieText, parseCookieObject, normalizeCookie };
+  return { parseCookieText, parseCookieObject, normalizeCookie, extractCookieSegment };
 });

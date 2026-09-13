@@ -2,7 +2,7 @@ const { app, BrowserWindow, session, ipcMain, clipboard, dialog, screen } = requ
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { parseCookieText } = require('./src/cookie-parser');
+const { parseCookieText, extractCookieSegment } = require('./src/cookie-parser');
 
 // Partition không persist: cookie/token chỉ tồn tại trong phiên chạy hiện tại, không ghi vào hồ sơ trình duyệt mặc định.
 const FACEBOOK_PARTITION = 'facebook-auth-private';
@@ -432,19 +432,12 @@ function parseMultipleCookiesFromText(text) {
       continue;
     }
 
-    let cookieStr = trimmed;
-    let uidHint = null;
-    if (trimmed.includes('|')) {
-      const parts = trimmed.split('|');
-      cookieStr = parts.find(part => /(?:^|[;\s])(c_user|xs|fr|datr|sb)\s*=/i.test(part)) ||
-        parts.find(part => part.includes('=') && part.includes(';')) || parts[parts.length - 1];
-      uidHint = parts[0].trim();
-    }
-
+    const cookieStr = extractCookieSegment(trimmed);
     const cookies = parseCookieText(cookieStr);
     const hasSession = cookies.some(c => ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(c.name.toLowerCase()));
     if (cookies.length >= 1 && (hasSession || cookies.length >= 3)) {
-      results.push({ cookies, type: 'cookie', uid: uidHint });
+      // Chỉ giữ cookie; không lưu account/password hoặc preview dòng gốc.
+      results.push({ cookies, type: 'cookie' });
     }
   }
   return results;

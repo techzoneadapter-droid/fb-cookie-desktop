@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { parseCookieText } = require('../src/cookie-parser');
+const { parseCookieText, extractCookieSegment } = require('../src/cookie-parser');
 
 function values(input) {
   return Object.fromEntries(parseCookieText(input).map(cookie => [cookie.name, cookie.value]));
@@ -49,6 +49,14 @@ assert.deepEqual(values('name,value,domain\nc_user,123,.facebook.com\nxs,abc,.fa
 });
 assert.deepEqual(values('.facebook.com\tTRUE\t/\tTRUE\t1999999999\tc_user\t123'), {
   c_user: '123'
+});
+const accountPasswordCookieLine = '2168997796|not-a-cookie-password|ps\\_l=1; ps\\_n=1; dbln=%7B%22id%22%3A%22value%22%7D; datr=device-value';
+assert.equal(extractCookieSegment(accountPasswordCookieLine), 'ps\\_l=1; ps\\_n=1; dbln=%7B%22id%22%3A%22value%22%7D; datr=device-value');
+assert.deepEqual(values(accountPasswordCookieLine), {
+  ps_l: '1', ps_n: '1', dbln: '%7B%22id%22%3A%22value%22%7D', datr: 'device-value'
+});
+assert.deepEqual(values('account@example.test|password=never-import-this|c_user=123; xs=session-value'), {
+  c_user: '123', xs: 'session-value'
 });
 
 console.log('cookie-parser: all tests passed');
