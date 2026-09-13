@@ -116,7 +116,14 @@ async function extractTokenFast(win) {
 
         function isPlausibleToken(candidate) {
           const body = candidate.slice(3);
-          return body.length >= 77 && new Set(body).size >= 8;
+          const counts = {};
+          for (const char of body) counts[char] = (counts[char] || 0) + 1;
+          const dominantRatio = Math.max(...Object.values(counts)) / body.length;
+          return body.length >= 77 &&
+            new Set(body).size >= 10 &&
+            dominantRatio < 0.45 &&
+            /[a-z]/.test(body) &&
+            /\d/.test(body);
         }
 
         function findToken(value, source, depth) {
