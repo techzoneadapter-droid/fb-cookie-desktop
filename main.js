@@ -342,21 +342,12 @@ async function ensureHiddenWindow() {
 }
 
 // ===== LẤY TOKEN NHANH =====
-function showFacebookWindow(win) {
-  if (!win || win.isDestroyed()) return;
-  win.show();
-  win.maximize();
-  win.focus();
-}
-
-async function fetchTokenFast(options = {}) {
+async function fetchTokenFast() {
   const win = await ensureHiddenWindow();
-  const showOnAuthenticated = !!options.showOnAuthenticated;
 
   return new Promise(async (resolve) => {
     let done = false;
     let lastResult = null;
-    let hasShownWindow = false;
     const finish = (r) => {
       if (done) return;
       done = true;
@@ -380,10 +371,6 @@ async function fetchTokenFast(options = {}) {
         await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 1000));
         result = await extractTokenFast(win);
         lastResult = result;
-        if (result.authenticated && showOnAuthenticated && !hasShownWindow) {
-          hasShownWindow = true;
-          showFacebookWindow(win);
-        }
         if (result.success || ['not_logged_in', 'checkpoint', 'restricted', 'page_error'].includes(result.authStatus)) {
           finish(result);
           return;
@@ -484,7 +471,7 @@ ipcMain.handle('login-and-get-token', async (event, cookies) => {
     return { success: false, authenticated: false, authStatus: 'set_failed', error: 'Không thể nạp cookie Facebook hợp lệ.' };
   }
   sendToRenderer('status-update', { message: 'Đang xác thực cookie với Facebook...', type: 'info' });
-  const r = await fetchTokenFast({ showOnAuthenticated: true });
+  const r = await fetchTokenFast();
   return {
     success: r.authenticated,
     authenticated: r.authenticated,
@@ -501,7 +488,6 @@ ipcMain.handle('open-facebook-external', async () => {
   try {
     await win.loadURL(FACEBOOK_ENTRY_URL);
   } catch (e) {}
-  showFacebookWindow(win);
   return true;
 });
 
