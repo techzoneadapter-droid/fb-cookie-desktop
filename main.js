@@ -111,34 +111,69 @@ async function extractTokenFast(win) {
         if (isLogin) return { token: null, uid: null, isLoginPage: true };
 
         let token = null, method = '', uid = null;
+        const tokenPattern = /EAA[A-Za-z0-9_-]{40,}/;
 
-        // localStorage nhanh
-        try {
-          for (let i = 0; i < localStorage.length; i++) {
-            const v = localStorage.getItem(localStorage.key(i));
-            if (!v || typeof v !== 'string') continue;
-            if (v.startsWith('EAA') && v.length > 60) { token = v; method = 'ls'; break; }
-            if (v.includes('EAA') && v.length > 80) {
+        function findToken(value, source, depth) {
+          if (value === null || value === undefined || depth > 5) return null;
+          if (typeof value === 'string') {
+            const direct = value.match(tokenPattern);
+            if (direct) return { token: direct[0], method: source };
+            if (value.length > 20) {
               try {
-                const p = JSON.parse(v);
-                if (p && (p.access_token || p.accessToken)) {
-                  const t = p.access_token || p.accessToken;
-                  if (String(t).startsWith('EAA')) { token = t; method = 'ls-json'; break; }
-                }
-              } catch(e) {}
+                const parsed = JSON.parse(value);
+                return findToken(parsed, source + '-json', depth + 1);
+              } catch (e) {}
+            }
+            return null;
+          }
+          if (typeof value !== 'object') return null;
+          const priorityKeys = ['access_token', 'accessToken', 'token', 'accessTokenValue'];
+          for (const key of priorityKeys) {
+            if (Object.prototype.hasOwnProperty.call(value, key)) {
+              const found = findToken(value[key], source + '-' + key, depth + 1);
+              if (found) return found;
             }
           }
-        } catch(e) {}
+          if (Array.isArray(value)) {
+            for (const item of value) {
+              const found = findToken(item, source, depth + 1);
+              if (found) return found;
+            }
+          }
+          return null;
+        }
 
-        // HTML scan nhanh nếu chưa có
+        function scanStorage(storage, source) {
+          try {
+            for (let i = 0; i < storage.length; i++) {
+              const key = storage.key(i);
+              const found = findToken(storage.getItem(key), source + ':' + key, 0);
+              if (found) return found;
+            }
+          } catch (e) {}
+          return null;
+        }
+
+        let found = scanStorage(localStorage, 'localStorage') || scanStorage(sessionStorage, 'sessionStorage');
+        if (found) { token = found.token; method = found.method; }
+
+        // Facebook thường đặt dữ liệu trong các script được tạo sau khi trang tải xong.
         if (!token) {
           try {
-            const html = document.documentElement.innerHTML;
-            const m = html.match(/"accessToken"\\s*:\\s*"(EAA[^"]{50,})"/) ||
-                      html.match(/"access_token"\\s*:\\s*"(EAA[^"]{50,})"/) ||
-                      html.match(/(EAA[A-Za-z0-9]{80,})/);
-            if (m) { token = m[1] || m[0]; method = 'html'; }
-          } catch(e) {}
+            const nodes = document.querySelectorAll('script, body');
+            for (const node of nodes) {
+              const foundInNode = findToken(node.textContent || node.innerHTML || '', 'dom', 0);
+              if (foundInNode) { token = foundInNode.token; method = foundInNode.method; break; }
+            }
+          } catch (e) {}
+        }
+
+        if (!token) {
+          try {
+            const html = document.documentElement.outerHTML || '';
+            const foundInHtml = findToken(html, 'html', 0);
+            if (foundInHtml) { token = foundInHtml.token; method = foundInHtml.method; }
+          } catch (e) {}
         }
 
         // UID
@@ -212,22 +247,20 @@ async function fetchTokenFast() {
     };
 
     const timer = setTimeout(() => {
-      finish({ success: false, error: 'Timeout', isLoginPage: false });
-    }, 12000); // max 12s mỗi cookie
+      finish({ success: false, error: 'Không tìm thấy Access Token sau 12 giây', isLoginPage: false });
+    }, 12000); // tối đa 12s mỗi cookie
 
     const onLoad = async () => {
-      // Đợi ngắn cho JS chạy
-      await new Promise(r => setTimeout(r, 900));
-
-      let result = await extractTokenFast(win);
-      if (result.success || result.isLoginPage) {
-        finish(result);
-        return;
+      let result = { success: false, error: 'Đang chờ Facebook tải dữ liệu', isLoginPage: false };
+      // Facebook tải dữ liệu đăng nhập bất đồng bộ, vì vậy cần kiểm tra nhiều lần.
+      for (let attempt = 0; attempt < 10; attempt++) {
+        await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 1000));
+        result = await extractTokenFast(win);
+        if (result.success || result.isLoginPage) {
+          finish(result);
+          return;
+        }
       }
-
-      // Thử thêm 1 lần sau 1.2s
-      await new Promise(r => setTimeout(r, 1200));
-      result = await extractTokenFast(win);
       finish(result);
     };
 
@@ -330,6 +363,14 @@ function parseMultipleCookiesFromText(text) {
 ipcMain.handle('clear-facebook-cookies', async () => await clearAllFacebookCookies());
 
 ipcMain.handle('login-and-get-token', async (event, cookies) => {
+  const cookieNames = new Set((cookies || []).map(c => String(c.name || '').trim().toLowerCase()));
+  const missing = ['c_user', 'xs'].filter(name => !cookieNames.has(name));
+  if (missing.length > 0) {
+    return {
+      success: false,
+      error: 'Cookie thiếu ' + missing.join(' và ') + '. Hãy sao chép đầy đủ cookie Facebook từ đúng tài khoản.'
+    };
+  }
   await clearAllFacebookCookies();
   const count = await setCookiesList(cookies);
   if (count === 0) return { success: false, error: 'Không set được cookie' };
