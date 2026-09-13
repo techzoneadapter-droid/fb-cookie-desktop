@@ -2,6 +2,7 @@ const { app, BrowserWindow, session, ipcMain, shell, clipboard, dialog, screen }
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
+const { parseCookieText } = require('./src/cookie-parser');
 
 // Tắt auto download mặc định, chỉ khi user bấm
 autoUpdater.autoDownload = false;
@@ -110,14 +111,21 @@ async function extractTokenFast(win) {
           !!document.querySelector('input[name="email"]') || !!document.querySelector('#email');
         if (isLogin) return { token: null, uid: null, isLoginPage: true };
 
-        let token = null, method = '', uid = null;
-        const tokenPattern = /EAA[A-Za-z0-9_-]{40,}/;
+        let token = null, method = '', uid = null, invalidToken = false;
+        const tokenPattern = /EAA[A-Za-z0-9_-]{77,}/g;
+
+        function isPlausibleToken(candidate) {
+          const body = candidate.slice(3);
+          return body.length >= 77 && new Set(body).size >= 8;
+        }
 
         function findToken(value, source, depth) {
           if (value === null || value === undefined || depth > 5) return null;
           if (typeof value === 'string') {
-            const direct = value.match(tokenPattern);
-            if (direct) return { token: direct[0], method: source };
+            const candidates = value.match(tokenPattern) || [];
+            const direct = candidates.find(isPlausibleToken);
+            if (direct) return { token: direct, method: source };
+            if (candidates.length) invalidToken = true;
             if (value.length > 20) {
               try {
                 const parsed = JSON.parse(value);
@@ -182,7 +190,7 @@ async function extractTokenFast(win) {
           if (c) uid = c.split('=')[1].trim();
         } catch(e) {}
 
-        return { token, method, uid, isLoginPage: false };
+        return { token, method, uid, isLoginPage: false, invalidToken };
       })();
     `);
     return {
@@ -191,7 +199,8 @@ async function extractTokenFast(win) {
       method: result.method || null,
       uid: result.uid || null,
       isLoginPage: !!result.isLoginPage,
-      error: result.isLoginPage ? 'Cookie hết hạn' : (result.token ? null : 'Không tìm thấy Access Token')
+      error: result.isLoginPage ? 'Cookie hết hạn' : (result.token ? null :
+        (result.invalidToken ? 'Facebook trả về chuỗi token không hợp lệ, đã bỏ qua' : 'Không tìm thấy Access Token'))
     };
   } catch (err) {
     return { success: false, error: err.message };
@@ -279,81 +288,42 @@ async function fetchTokenFast() {
 
 // ===== PARSE FILE =====
 function parseMultipleCookiesFromText(text) {
+  const raw = String(text || '').replace(/^\uFEFF/, '').trim();
+  if (!raw) return [];
+  const lines = raw.split(/\r?\n/);
   const results = [];
-  const lines = text.split(/\r?\n/).map(l => l.trim()).filter(l => l && !l.startsWith('#'));
 
-  function makeCookieObj(name, value) {
-    return {
-      name: String(name).trim(),
-      value: String(value).trim(),
-      domain: '.facebook.com',
-      path: '/',
-      secure: true,
-      httpOnly: false,
-      expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90
-    };
-  }
-
-  function parseCookieString(str) {
-    if (!str) return [];
-    return str.split(';').map(part => {
-      const idx = part.indexOf('=');
-      if (idx === -1) return null;
-      const name = part.slice(0, idx).trim();
-      const value = part.slice(idx + 1).trim();
-      if (!name) return null;
-      return makeCookieObj(name, value);
-    }).filter(Boolean);
+  // JSON array/object và Netscape cookies.txt thường đại diện cho một tài khoản.
+  if (raw.startsWith('[') || raw.startsWith('{') ||
+      lines.some(line => !line.trim().startsWith('#') && line.split('\t').length >= 7)) {
+    const cookies = parseCookieText(raw);
+    if (cookies.length) results.push({ raw: raw.slice(0, 90), cookies, type: 'cookie' });
+    return results;
   }
 
   for (const line of lines) {
-    if (line.length < 15) continue;
-    let cookieStr = null, preview = line.slice(0, 90) + (line.length > 90 ? '...' : ''), uidHint = null;
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const preview = trimmed.slice(0, 90) + (trimmed.length > 90 ? '...' : '');
 
-    if (line.includes('|') && (line.includes('c_user=') || line.includes('xs=') || line.includes(';'))) {
-      const parts = line.split('|');
-      if (parts.length >= 3) {
-        cookieStr = parts.slice(2).join('|').trim();
-        uidHint = parts[0].trim();
-      } else if (parts.length === 2) {
-        cookieStr = parts[1].trim();
-        uidHint = parts[0].trim();
-      }
-    }
-
-    if (!cookieStr && line.includes('|') && line.includes('business.facebook.com/invitation')) {
-      const parts = line.split('|');
-      results.push({
-        raw: preview, cookies: [], type: 'invitation',
-        uid: parts[0] ? parts[0].trim() : null
-      });
+    if (trimmed.includes('|') && trimmed.includes('business.facebook.com/invitation')) {
+      results.push({ raw: preview, cookies: [], type: 'invitation', uid: trimmed.split('|')[0].trim() });
       continue;
     }
 
-    if (!cookieStr && line.startsWith('[')) {
-      try {
-        const arr = JSON.parse(line);
-        if (Array.isArray(arr) && arr[0] && arr[0].name) {
-          results.push({
-            raw: preview,
-            cookies: arr.map(c => makeCookieObj(c.name, c.value)),
-            type: 'json'
-          });
-          continue;
-        }
-      } catch (e) {}
+    let cookieStr = trimmed;
+    let uidHint = null;
+    if (trimmed.includes('|')) {
+      const parts = trimmed.split('|');
+      cookieStr = parts.find(part => /(?:^|[;\s])(c_user|xs|fr|datr|sb)\s*=/i.test(part)) ||
+        parts.find(part => part.includes('=') && part.includes(';')) || parts[parts.length - 1];
+      uidHint = parts[0].trim();
     }
 
-    if (!cookieStr && (line.includes('c_user=') || line.includes('xs=') || (line.includes('=') && line.includes(';')))) {
-      cookieStr = line;
-    }
-
-    if (cookieStr) {
-      const cookies = parseCookieString(cookieStr);
-      const hasSession = cookies.some(c => ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(c.name));
-      if (cookies.length >= 1 && (hasSession || cookies.length >= 3)) {
-        results.push({ raw: preview, cookies, type: 'cookie', uid: uidHint });
-      }
+    const cookies = parseCookieText(cookieStr);
+    const hasSession = cookies.some(c => ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(c.name.toLowerCase()));
+    if (cookies.length >= 1 && (hasSession || cookies.length >= 3)) {
+      results.push({ raw: preview, cookies, type: 'cookie', uid: uidHint });
     }
   }
   return results;

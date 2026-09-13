@@ -41,35 +41,7 @@ function appendToken(token) {
 }
 
 function parseCookies(input) {
-  input = input.trim();
-  if (!input) return [];
-  if (input.startsWith('[') || input.startsWith('{')) {
-    try {
-      const parsed = JSON.parse(input);
-      const list = Array.isArray(parsed) ? parsed : [parsed];
-      return list.filter(c => c && c.name && c.value !== undefined).map(c => ({
-        name: String(c.name).trim(),
-        value: String(c.value).trim(),
-        domain: c.domain || '.facebook.com',
-        path: c.path || '/',
-        secure: c.secure !== false,
-        httpOnly: !!c.httpOnly,
-        expirationDate: c.expirationDate || (Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90)
-      }));
-    } catch (e) { throw new Error('JSON cookie không hợp lệ'); }
-  }
-  return input.split(';').map(part => {
-    const idx = part.indexOf('=');
-    if (idx === -1) return null;
-    const name = part.slice(0, idx).trim();
-    const value = part.slice(idx + 1).trim();
-    if (!name) return null;
-    return {
-      name, value, domain: '.facebook.com', path: '/',
-      secure: true, httpOnly: false,
-      expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90
-    };
-  }).filter(Boolean);
+  return window.CookieParser.parseCookieText(input);
 }
 
 document.querySelectorAll('.copy-btn').forEach(btn => {
