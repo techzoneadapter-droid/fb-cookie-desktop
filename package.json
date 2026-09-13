@@ -1,6 +1,6 @@
 {
   "name": "fb-cookie-token-tool",
-  "version": "1.4.0",
+  "version": "1.4.1",
   "description": "FB Cookie & Access Token Tool - Chi dung cho Facebook",
   "main": "main.js",
   "author": "Local Tool",
