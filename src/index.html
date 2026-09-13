@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>FB Cookie & Token Tool</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #e8eaed;
+      color: #1c1e21;
+      height: 100vh;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+    }
+    .topbar {
+      background: #1877f2;
+      color: white;
+      padding: 10px 16px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-shrink: 0;
+    }
+    .topbar h1 { font-size: 18px; font-weight: 700; }
+    .badge { background: rgba(255,255,255,0.25); font-size: 11px; padding: 2px 8px; border-radius: 4px; }
+    .main {
+      flex: 1;
+      display: grid;
+      grid-template-columns: 340px 1fr 1fr;
+      gap: 12px;
+      padding: 12px;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel {
+      background: white;
+      border-radius: 10px;
+      box-shadow: 0 1px 4px rgba(0,0,0,0.08);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      min-height: 0;
+    }
+    .panel-header {
+      padding: 10px 14px;
+      font-size: 13px;
+      font-weight: 600;
+      color: #606770;
+      border-bottom: 1px solid #e4e6eb;
+      flex-shrink: 0;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .panel-body { flex: 1; overflow: auto; padding: 12px; min-height: 0; }
+    textarea {
+      width: 100%; padding: 10px; border: 1.5px solid #ccd0d5; border-radius: 8px;
+      font-size: 12px; font-family: Consolas, Monaco, monospace; outline: none; resize: vertical;
+    }
+    textarea:focus { border-color: #1877f2; }
+    #cookieInput { height: 90px; }
+    .log-box, .token-box {
+      width: 100%; height: 100%;
+      background: #1e1e1e; color: #d4d4d4;
+      border: none; border-radius: 6px;
+      font-size: 12px; font-family: Consolas, Monaco, monospace;
+      padding: 10px; resize: none; outline: none;
+    }
+    .token-box { background: #0d1f0d; color: #7dcea0; }
+    .btn-row { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+    button {
+      padding: 9px 12px; border: none; border-radius: 8px; font-size: 13px; font-weight: 600;
+      cursor: pointer; transition: all 0.15s;
+    }
+    button:active { transform: scale(0.97); }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #1877f2; color: white; flex: 1; }
+    .btn-primary:hover:not(:disabled) { background: #166fe5; }
+    .btn-green { background: #42b72a; color: white; }
+    .btn-green:hover:not(:disabled) { background: #36a420; }
+    .btn-gray { background: #e4e6eb; color: #1c1e21; }
+    .btn-gray:hover:not(:disabled) { background: #d8dadf; }
+    .btn-red { background: #e74c3c; color: white; }
+    .btn-red:hover:not(:disabled) { background: #c0392b; }
+    .btn-sm { padding: 5px 10px; font-size: 12px; }
+    .file-info { font-size: 12px; color: #65676b; margin-top: 6px; word-break: break-all; }
+    .progress-bar {
+      height: 6px; background: #e4e6eb; border-radius: 3px; margin-top: 8px; overflow: hidden; display: none;
+    }
+    .progress-bar.show { display: block; }
+    .progress-fill { height: 100%; background: #1877f2; width: 0%; transition: width 0.25s; }
+    .status {
+      margin-top: 8px; padding: 8px 10px; border-radius: 8px; font-size: 12px; display: none; line-height: 1.4;
+    }
+    .status.show { display: block; }
+    .status.success { background: #e7f3ff; color: #1877f2; }
+    .status.error { background: #fef2f2; color: #dc2626; }
+    .status.info { background: #f0fdf4; color: #16a34a; }
+    .link-fb { color: #1877f2; font-size: 12px; font-weight: 600; text-decoration: none; margin-top: 8px; display: inline-block; }
+    .link-fb:hover { text-decoration: underline; }
+    .warning {
+      background: #fff8e6; border: 1px solid #f7d070; color: #7c5e10;
+      font-size: 11px; padding: 8px; border-radius: 8px; margin-top: 10px; line-height: 1.4;
+    }
+    .info-row {
+      display: flex; justify-content: space-between; align-items: center;
+      gap: 8px; margin-bottom: 6px; font-size: 12px;
+    }
+    .label { color: #65676b; font-weight: 500; min-width: 48px; }
+    .value { font-weight: 600; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .copy-btn {
+      background: none; border: 1px solid #ccd0d5; padding: 2px 7px; font-size: 11px;
+      border-radius: 4px; cursor: pointer; color: #1877f2;
+    }
+    .copy-btn:hover { background: #e7f3ff; }
+    .count-badge {
+      background: #1877f2; color: white; font-size: 11px; padding: 1px 7px; border-radius: 10px;
+    }
+    .loading {
+      display: inline-block; width: 12px; height: 12px; border: 2px solid #fff;
+      border-top-color: transparent; border-radius: 50%; animation: spin 0.8s linear infinite;
+      margin-right: 5px; vertical-align: middle;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+  </style>
+</head>
+<body>
+  <div class="topbar">
+    <svg width="22" height="22" viewBox="0 0 24 24" fill="white">
+      <path d="M24 12.073c0-6.627-5.373-12-12-12s-12 5.373-12 12c0 5.99 4.388 10.954 10.125 11.854v-8.385H7.078v-3.47h3.047V9.43c0-3.007 1.792-4.669 4.533-4.669 1.312 0 2.686.235 2.686.235v2.953H15.83c-1.491 0-1.956.925-1.956 1.874v2.25h3.328l-.532 3.47h-2.796v8.385C19.612 23.027 24 18.062 24 12.073z"/>
+    </svg>
+    <h1>FB Cookie & Token Tool</h1>
+    <span class="badge">ONLY FACEBOOK • LOCAL • NGẦM</span>
+    <span style="margin-left:auto;font-size:12px;opacity:0.9" id="versionLabel">v—</span>
+    <button id="updateBtn" style="margin-left:10px;background:rgba(255,255,255,0.2);color:white;border:1px solid rgba(255,255,255,0.4);padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cập nhật</button>
+  </div>
+
+  <div class="main">
+    <!-- Cột trái: Điều khiển -->
+    <div class="panel">
+      <div class="panel-header">Điều khiển</div>
+      <div class="panel-body">
+        <div style="font-size:13px;font-weight:600;color:#606770;margin-bottom:6px;">1. Cookie đơn lẻ</div>
+        <textarea id="cookieInput" placeholder="Dán 1 cookie Facebook vào đây"></textarea>
+        <div class="btn-row">
+          <button class="btn-primary" id="loginBtn">Đăng nhập & Lấy Token</button>
+          <button class="btn-gray" id="clearBtn">Xóa</button>
+        </div>
+        <a href="#" class="link-fb" id="fbLink">Mở Facebook.com</a>
+
+        <div style="font-size:13px;font-weight:600;color:#606770;margin:14px 0 6px;">2. Import file (batch ngầm)</div>
+        <div class="btn-row">
+          <button class="btn-green" id="importBtn">Chọn file</button>
+          <button class="btn-primary" id="startBatchBtn" disabled>Bắt đầu</button>
+          <button class="btn-red" id="stopBatchBtn" disabled>Dừng</button>
+        </div>
+        <div class="file-info" id="fileInfo">Chưa chọn file</div>
+        <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+
+        <div style="font-size:13px;font-weight:600;color:#606770;margin:14px 0 6px;">Cookie hiện tại</div>
+        <div class="info-row">
+          <span class="label">UID:</span>
+          <span class="value" id="uidValue">—</span>
+          <button class="copy-btn" data-target="uidValue">Copy</button>
+        </div>
+        <div class="info-row">
+          <span class="label">Token:</span>
+          <span class="value" id="tokenValue">Chưa có</span>
+          <button class="copy-btn" data-target="tokenValue">Copy</button>
+        </div>
+
+        <div id="status" class="status"></div>
+        <div class="warning">
+          ⚠️ Chỉ Facebook • Chạy ngầm • Không gửi server • Chỉ tài khoản của bạn
+        </div>
+      </div>
+    </div>
+
+    <!-- Cột giữa: Log trạng thái -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Log trạng thái</span>
+        <div>
+          <button class="btn-gray btn-sm" id="copyLogBtn">Copy log</button>
+          <button class="btn-gray btn-sm" id="clearLogBtn">Xóa</button>
+        </div>
+      </div>
+      <div class="panel-body" style="padding:8px;">
+        <textarea class="log-box" id="logArea" readonly placeholder="Trạng thái xử lý từng cookie sẽ hiện ở đây..."></textarea>
+      </div>
+    </div>
+
+    <!-- Cột phải: Token đã lấy được -->
+    <div class="panel">
+      <div class="panel-header">
+        <span>Token đã lấy được <span class="count-badge" id="tokenCount">0</span></span>
+        <div>
+          <button class="btn-gray btn-sm" id="copyTokensBtn">Copy tokens</button>
+          <button class="btn-gray btn-sm" id="clearTokensBtn">Xóa</button>
+        </div>
+      </div>
+      <div class="panel-body" style="padding:8px;">
+        <textarea class="token-box" id="tokenArea" readonly placeholder="Mỗi token thành công sẽ hiện 1 dòng ở đây..."></textarea>
+      </div>
+    </div>
+  </div>
+
+  <script src="renderer.js"></script>
+</body>
+</html>
