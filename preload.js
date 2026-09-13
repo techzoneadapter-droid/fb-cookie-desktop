@@ -3,7 +3,6 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   loginAndGetToken: (cookies) => ipcRenderer.invoke('login-and-get-token', cookies),
   clearFacebookCookies: () => ipcRenderer.invoke('clear-facebook-cookies'),
-  getCookieAndUid: () => ipcRenderer.invoke('get-cookie-and-uid'),
   openFacebookExternal: () => ipcRenderer.invoke('open-facebook-external'),
   copyText: (text) => ipcRenderer.invoke('copy-text', text),
   selectCookieFile: () => ipcRenderer.invoke('select-cookie-file'),

@@ -1,26 +1,45 @@
-const { app, BrowserWindow, session, ipcMain, shell, clipboard, dialog, screen } = require('electron');
+const { app, BrowserWindow, session, ipcMain, clipboard, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
 const { parseCookieText } = require('./src/cookie-parser');
 
-const FACEBOOK_PARTITION = 'persist:facebook-auth';
+// Partition không persist: cookie/token chỉ tồn tại trong phiên chạy hiện tại, không ghi vào hồ sơ trình duyệt mặc định.
+const FACEBOOK_PARTITION = 'facebook-auth-private';
 const FACEBOOK_ENTRY_URL = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns/';
+const FACEBOOK_WEB_DOMAINS = ['facebook.com', 'fb.com', 'facebook.net', 'fbcdn.net', 'fbsbx.com'];
+const FACEBOOK_COOKIE_DOMAINS = ['facebook.com', 'fb.com'];
 let facebookSession = null;
 let facebookNetworkGuardInstalled = false;
+
+function isDomainOrSubdomain(host, allowedDomain) {
+  return host === allowedDomain || host.endsWith('.' + allowedDomain);
+}
+
+function isAllowedDomain(host, allowedDomains) {
+  const normalized = String(host || '').trim().toLowerCase().replace(/^\.+/, '');
+  return !!normalized && allowedDomains.some(domain => isDomainOrSubdomain(normalized, domain));
+}
 
 function isAllowedFacebookUrl(rawUrl) {
   try {
     const url = new URL(rawUrl);
-    if (!['http:', 'https:'].includes(url.protocol)) return true;
+    if (url.protocol !== 'https:') return false;
     const host = url.hostname.toLowerCase();
-    return host === 'facebook.com' || host.endsWith('.facebook.com') ||
-      host === 'fb.com' || host.endsWith('.fb.com') ||
-      host === 'facebook.net' || host.endsWith('.facebook.net') ||
-      host.endsWith('.fbcdn.net');
+    return isAllowedDomain(host, FACEBOOK_WEB_DOMAINS);
   } catch (e) {
     return false;
   }
+}
+
+function normalizeFacebookCookieDomain(rawDomain) {
+  let original = String(rawDomain || '.facebook.com').trim().toLowerCase();
+  if (/^https?:\/\//.test(original)) {
+    try { original = new URL(original).hostname; } catch (e) { return null; }
+  }
+  const host = original.replace(/^\.+/, '');
+  if (!isAllowedDomain(host, FACEBOOK_COOKIE_DOMAINS)) return null;
+  return original.startsWith('.') ? '.' + host : host;
 }
 
 function getFacebookSession() {
@@ -31,6 +50,7 @@ function getFacebookSession() {
       callback({ cancel: !isAllowedFacebookUrl(details.url) });
     });
     facebookSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    facebookSession.on('will-download', (event) => event.preventDefault());
   }
   return facebookSession;
 }
@@ -69,7 +89,6 @@ function createMainWindow() {
     mainWindow.maximize();
   });
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
-    if (isAllowedFacebookUrl(url)) shell.openExternal(url);
     return { action: 'deny' };
   });
 }
@@ -87,14 +106,12 @@ app.on('window-all-closed', () => {
 
 async function getAllFacebookCookies() {
   const ses = getFacebookSession();
-  const domains = ['.facebook.com', 'facebook.com', '.fb.com'];
-  const map = new Map();
-  for (const d of domains) {
-    try {
-      (await ses.cookies.get({ domain: d })).forEach(c => map.set(c.name, c));
-    } catch (e) {}
+  try {
+    const cookies = await ses.cookies.get({});
+    return cookies.filter(cookie => isAllowedDomain(cookie.domain, FACEBOOK_COOKIE_DOMAINS));
+  } catch (e) {
+    return [];
   }
-  return Array.from(map.values());
 }
 
 async function clearAllFacebookCookies() {
@@ -111,24 +128,35 @@ async function clearAllFacebookCookies() {
 async function setCookiesList(cookies) {
   const ses = getFacebookSession();
   let success = 0;
+  let rejected = 0;
+  let failed = 0;
   for (const cookie of cookies) {
-    const domain = (cookie.domain || '.facebook.com').toLowerCase();
-    if (!domain.includes('facebook.com') && !domain.includes('fb.com') && domain !== '') continue;
+    const domain = normalizeFacebookCookieDomain(cookie.domain);
+    if (!domain) {
+      rejected++;
+      continue;
+    }
+    const host = domain.replace(/^\./, '');
     try {
-      await ses.cookies.set({
-        url: 'https://www.facebook.com',
+      const details = {
+        url: `https://${host}/`,
         name: cookie.name,
         value: cookie.value,
-        domain: domain.startsWith('.') ? domain : (domain ? '.' + domain : '.facebook.com'),
+        domain,
         path: cookie.path || '/',
         secure: true,
-        httpOnly: !!cookie.httpOnly,
-        expirationDate: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 90
-      });
+        httpOnly: !!cookie.httpOnly
+      };
+      if (Number.isFinite(cookie.expirationDate) && cookie.expirationDate > Date.now() / 1000) {
+        details.expirationDate = cookie.expirationDate;
+      }
+      await ses.cookies.set(details);
       success++;
-    } catch (e) {}
+    } catch (e) {
+      failed++;
+    }
   }
-  return success;
+  return { success, rejected, failed };
 }
 
 // ===== EXTRACT NHANH =====
@@ -138,9 +166,18 @@ async function extractTokenFast(win) {
     const result = await win.webContents.executeJavaScript(`
       (function() {
         const href = location.href || '';
-        const isLogin = href.includes('/login') || href.includes('login.php') ||
+        const host = (location.hostname || '').toLowerCase();
+        const isFacebookHost = host === 'facebook.com' || host.endsWith('.facebook.com') ||
+          host === 'fb.com' || host.endsWith('.fb.com');
+        const isCheckpoint = ['/checkpoint', '/two_step_verification', '/auth_platform']
+          .some(path => href.toLowerCase().includes(path));
+        const isRestricted = ['/disabled', '/locked', '/account_recovery']
+          .some(path => href.toLowerCase().includes(path));
+        const isLogin = href.toLowerCase().includes('/login') || href.toLowerCase().includes('login.php') ||
           !!document.querySelector('input[name="email"]') || !!document.querySelector('#email');
-        if (isLogin) return { token: null, uid: null, isLoginPage: true };
+        if (isCheckpoint) return { token: null, uid: null, authStatus: 'checkpoint' };
+        if (isRestricted) return { token: null, uid: null, authStatus: 'restricted' };
+        if (isLogin) return { token: null, uid: null, authStatus: 'not_logged_in' };
 
         let token = null, method = '', uid = null, invalidToken = false;
         const tokenPattern = /EAA[A-Za-z0-9_-]{77,}/g;
@@ -154,7 +191,7 @@ async function extractTokenFast(win) {
             new Set(body).size >= 10 &&
             dominantRatio < 0.45 &&
             /[a-z]/.test(body) &&
-            /\d/.test(body);
+            /[0-9]/.test(body);
         }
 
         function findToken(value, source, depth) {
@@ -228,20 +265,32 @@ async function extractTokenFast(win) {
           if (c) uid = c.split('=')[1].trim();
         } catch(e) {}
 
-        return { token, method, uid, isLoginPage: false, invalidToken };
+        return {
+          token, method, uid, invalidToken,
+          authStatus: isFacebookHost ? 'authenticated' : 'loading'
+        };
       })();
     `);
+    const statusMessages = {
+      not_logged_in: 'Cookie không đăng nhập được: Facebook đã chuyển về trang đăng nhập. Cookie có thể sai, thiếu hoặc đã hết hạn.',
+      checkpoint: 'Cookie đã được nhận nhưng Facebook yêu cầu xác minh/checkpoint.',
+      restricted: 'Facebook báo tài khoản đang bị khóa hoặc hạn chế.',
+      loading: 'Đang chờ Facebook tải trang đăng nhập.'
+    };
     return {
-      success: !!result.token && !result.isLoginPage,
+      success: !!result.token && result.authStatus === 'authenticated',
+      authenticated: result.authStatus === 'authenticated',
+      authStatus: result.authStatus || 'loading',
       token: result.token || null,
       method: result.method || null,
       uid: result.uid || null,
-      isLoginPage: !!result.isLoginPage,
-      error: result.isLoginPage ? 'Cookie hết hạn' : (result.token ? null :
-        (result.invalidToken ? 'Facebook trả về chuỗi token không hợp lệ, đã bỏ qua' : 'Không tìm thấy Access Token'))
+      isLoginPage: result.authStatus === 'not_logged_in',
+      error: statusMessages[result.authStatus] || (result.token ? null :
+        (result.invalidToken ? 'Đăng nhập được nhưng Facebook trả về token không hợp lệ.' :
+          'Đăng nhập được nhưng chưa tìm thấy Access Token.'))
     };
   } catch (err) {
-    return { success: false, error: err.message };
+    return { success: false, authenticated: false, authStatus: 'page_error', error: 'Không thể kiểm tra trạng thái trang Facebook.' };
   }
 }
 
@@ -261,8 +310,10 @@ async function ensureHiddenWindow() {
       partition: FACEBOOK_PARTITION,
       nodeIntegration: false,
       contextIsolation: true,
+      sandbox: true,
+      webviewTag: false,
       backgroundThrottling: false,
-      images: false,          // không load ảnh → nhanh hơn
+      images: true,
       javascript: true
     }
   });
@@ -273,9 +324,14 @@ async function ensureHiddenWindow() {
     }
   });
 
-  hiddenFbWindow.webContents.setWindowOpenHandler(({ url }) => ({
-    action: isAllowedFacebookUrl(url) ? 'allow' : 'deny'
-  }));
+  hiddenFbWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedFacebookUrl(url)) {
+      setImmediate(() => {
+        if (hiddenFbWindow && !hiddenFbWindow.isDestroyed()) hiddenFbWindow.loadURL(url).catch(() => {});
+      });
+    }
+    return { action: 'deny' };
+  });
 
   hiddenFbWindow.on('closed', () => {
     hiddenFbWindow = null;
@@ -286,11 +342,21 @@ async function ensureHiddenWindow() {
 }
 
 // ===== LẤY TOKEN NHANH =====
-async function fetchTokenFast() {
+function showFacebookWindow(win) {
+  if (!win || win.isDestroyed()) return;
+  win.show();
+  win.maximize();
+  win.focus();
+}
+
+async function fetchTokenFast(options = {}) {
   const win = await ensureHiddenWindow();
+  const showOnAuthenticated = !!options.showOnAuthenticated;
 
   return new Promise(async (resolve) => {
     let done = false;
+    let lastResult = null;
+    let hasShownWindow = false;
     const finish = (r) => {
       if (done) return;
       done = true;
@@ -299,7 +365,12 @@ async function fetchTokenFast() {
     };
 
     const timer = setTimeout(() => {
-      finish({ success: false, error: 'Không tìm thấy Access Token sau 12 giây', isLoginPage: false });
+      finish(lastResult || {
+        success: false,
+        authenticated: false,
+        authStatus: 'timeout',
+        error: 'Facebook không phản hồi trạng thái đăng nhập sau 12 giây.'
+      });
     }, 12000); // tối đa 12s mỗi cookie
 
     const onLoad = async () => {
@@ -308,7 +379,12 @@ async function fetchTokenFast() {
       for (let attempt = 0; attempt < 10; attempt++) {
         await new Promise(r => setTimeout(r, attempt === 0 ? 1200 : 1000));
         result = await extractTokenFast(win);
-        if (result.success || result.isLoginPage) {
+        lastResult = result;
+        if (result.authenticated && showOnAuthenticated && !hasShownWindow) {
+          hasShownWindow = true;
+          showFacebookWindow(win);
+        }
+        if (result.success || ['not_logged_in', 'checkpoint', 'restricted', 'page_error'].includes(result.authStatus)) {
           finish(result);
           return;
         }
@@ -321,10 +397,14 @@ async function fetchTokenFast() {
     win.webContents.once('did-finish-load', onLoad);
 
     try {
-      // Load nhanh, bỏ cache nếu cần
       await win.loadURL(FACEBOOK_ENTRY_URL, { extraHeaders: 'pragma: no-cache\n' });
     } catch (e) {
-      finish({ success: false, error: e.message });
+      finish({
+        success: false,
+        authenticated: false,
+        authStatus: 'navigation_error',
+        error: 'Không thể mở Ads Manager. Hãy kiểm tra kết nối mạng hoặc trạng thái Facebook.'
+      });
     }
   });
 }
@@ -340,17 +420,28 @@ function parseMultipleCookiesFromText(text) {
   if (raw.startsWith('[') || raw.startsWith('{') ||
       lines.some(line => !line.trim().startsWith('#') && line.split('\t').length >= 7)) {
     const cookies = parseCookieText(raw);
-    if (cookies.length) results.push({ raw: raw.slice(0, 90), cookies, type: 'cookie' });
+    if (cookies.length) results.push({ cookies, type: 'cookie' });
+    return results;
+  }
+
+  const meaningfulLines = lines.map(line => line.trim()).filter(line => line && !line.startsWith('#'));
+  const looksLikeOneCookiePerLine = meaningfulLines.length > 1 && meaningfulLines.every(line => {
+    if (line.includes('|')) return false;
+    const parsed = parseCookieText(line);
+    return parsed.length === 1;
+  });
+  if (looksLikeOneCookiePerLine) {
+    const cookies = parseCookieText(meaningfulLines.join('; '));
+    if (cookies.length) results.push({ cookies, type: 'cookie' });
     return results;
   }
 
   for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed || trimmed.startsWith('#')) continue;
-    const preview = trimmed.slice(0, 90) + (trimmed.length > 90 ? '...' : '');
 
     if (trimmed.includes('|') && trimmed.includes('business.facebook.com/invitation')) {
-      results.push({ raw: preview, cookies: [], type: 'invitation', uid: trimmed.split('|')[0].trim() });
+      results.push({ cookies: [], type: 'invitation', uid: trimmed.split('|')[0].trim() });
       continue;
     }
 
@@ -366,7 +457,7 @@ function parseMultipleCookiesFromText(text) {
     const cookies = parseCookieText(cookieStr);
     const hasSession = cookies.some(c => ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(c.name.toLowerCase()));
     if (cookies.length >= 1 && (hasSession || cookies.length >= 3)) {
-      results.push({ raw: preview, cookies, type: 'cookie', uid: uidHint });
+      results.push({ cookies, type: 'cookie', uid: uidHint });
     }
   }
   return results;
@@ -376,38 +467,47 @@ function parseMultipleCookiesFromText(text) {
 ipcMain.handle('clear-facebook-cookies', async () => await clearAllFacebookCookies());
 
 ipcMain.handle('login-and-get-token', async (event, cookies) => {
-  const cookieNames = new Set((cookies || []).map(c => String(c.name || '').trim().toLowerCase()));
+  const facebookCookies = (cookies || []).filter(cookie => normalizeFacebookCookieDomain(cookie.domain));
+  const cookieNames = new Set(facebookCookies.map(c => String(c.name || '').trim().toLowerCase()));
   const missing = ['c_user', 'xs'].filter(name => !cookieNames.has(name));
   if (missing.length > 0) {
     return {
       success: false,
-      error: 'Cookie thiếu ' + missing.join(' và ') + '. Hãy sao chép đầy đủ cookie Facebook từ đúng tài khoản.'
+      authenticated: false,
+      authStatus: 'missing_required',
+      error: 'Cookie Facebook thiếu ' + missing.join(' và ') + '. Hãy sao chép đầy đủ cookie từ phiên đăng nhập của chính bạn.'
     };
   }
   await clearAllFacebookCookies();
-  const count = await setCookiesList(cookies);
-  if (count === 0) return { success: false, error: 'Không set được cookie' };
-  sendToRenderer('status-update', { message: 'Đang lấy token...', type: 'info' });
-  const r = await fetchTokenFast();
-  return { success: r.success, token: r.token, method: r.method, uid: r.uid, error: r.error };
+  const setResult = await setCookiesList(facebookCookies);
+  if (setResult.success === 0) {
+    return { success: false, authenticated: false, authStatus: 'set_failed', error: 'Không thể nạp cookie Facebook hợp lệ.' };
+  }
+  sendToRenderer('status-update', { message: 'Đang xác thực cookie với Facebook...', type: 'info' });
+  const r = await fetchTokenFast({ showOnAuthenticated: true });
+  return {
+    success: r.authenticated,
+    authenticated: r.authenticated,
+    authStatus: r.authStatus,
+    token: r.token,
+    method: r.method,
+    uid: r.uid,
+    error: r.error
+  };
 });
 
 ipcMain.handle('open-facebook-external', async () => {
-  await shell.openExternal(FACEBOOK_ENTRY_URL);
+  const win = await ensureHiddenWindow();
+  try {
+    await win.loadURL(FACEBOOK_ENTRY_URL);
+  } catch (e) {}
+  showFacebookWindow(win);
   return true;
 });
 
 ipcMain.handle('copy-text', async (e, text) => {
   clipboard.writeText(text || '');
   return true;
-});
-
-ipcMain.handle('get-cookie-and-uid', async () => {
-  const cookies = await getAllFacebookCookies();
-  return {
-    cookie: cookies.map(c => c.name + '=' + c.value).join('; '),
-    uid: (cookies.find(c => c.name === 'c_user') || {}).value || null
-  };
 });
 
 ipcMain.handle('select-cookie-file', async () => {
@@ -467,8 +567,8 @@ ipcMain.handle('start-batch', async (e, filePath) => {
       }
 
       await clearAllFacebookCookies();
-      const setCount = await setCookiesList(item.cookies);
-      if (setCount === 0) {
+      const setResult = await setCookiesList(item.cookies);
+      if (setResult.success === 0) {
         failCount++;
         sendToRenderer('batch-line', { index: i + 1, status: 'fail', message: `[${i + 1}] Không set được cookie` });
         continue;

@@ -44,6 +44,12 @@ function parseCookies(input) {
   return window.CookieParser.parseCookieText(input);
 }
 
+function isFacebookCookieDomain(domain) {
+  const host = String(domain || '.facebook.com').trim().toLowerCase().replace(/^\.+/, '');
+  return host === 'facebook.com' || host.endsWith('.facebook.com') ||
+    host === 'fb.com' || host.endsWith('.fb.com');
+}
+
 document.querySelectorAll('.copy-btn').forEach(btn => {
   btn.addEventListener('click', async () => {
     const el = document.getElementById(btn.dataset.target);
@@ -109,30 +115,39 @@ loginBtn.addEventListener('click', async () => {
 
   try {
     const cookies = parseCookies(raw);
-    if (cookies.length === 0) throw new Error('Cookie không hợp lệ');
-    const fbCookies = cookies.filter(c => {
-      const d = (c.domain || '').toLowerCase();
-      return d.includes('facebook') || d.includes('fb.com') || !d;
-    });
+    if (cookies.length === 0) throw new Error('Cookie không hợp lệ hoặc không nhận diện được định dạng');
+    const fbCookies = cookies.filter(c => isFacebookCookieDomain(c.domain));
     if (fbCookies.length === 0) throw new Error('Không có cookie Facebook');
+    cookieInput.value = '';
 
-    showStatus('Đang chạy ngầm lấy token...', 'info');
+    showStatus('Đang xác thực cookie với Facebook...', 'info');
     const result = await window.electronAPI.loginAndGetToken(fbCookies);
 
-    if (result.success && result.token) {
+    if (result.authenticated) {
       uidValue.textContent = result.uid || '—';
       uidValue.title = result.uid || '';
-      tokenValue.textContent = result.token.length > 36 ? result.token.slice(0, 36) + '...' : result.token;
-      tokenValue.dataset.full = result.token;
-      tokenValue.title = result.token;
-      appendLog('[OK] UID: ' + (result.uid || 'N/A'));
-      appendToken(result.token);
-      showStatus('Thành công! Token đã lấy được', 'success');
+      appendLog('[OK] Cookie đăng nhập được | UID: ' + (result.uid || 'N/A'));
+      if (result.token) {
+        tokenValue.textContent = result.token.length > 36 ? result.token.slice(0, 36) + '...' : result.token;
+        tokenValue.dataset.full = result.token;
+        tokenValue.title = result.token;
+        appendToken(result.token);
+        showStatus('Cookie đăng nhập thành công. Đã mở Ads Manager và lấy được token.', 'success');
+      } else {
+        tokenValue.textContent = 'Chưa tìm thấy';
+        tokenValue.dataset.full = '';
+        tokenValue.title = '';
+        appendLog('[INFO] Đăng nhập được nhưng chưa tìm thấy Access Token');
+        showStatus('Cookie đăng nhập thành công và Ads Manager đã mở; chưa tìm thấy Access Token.', 'success');
+      }
     } else {
+      uidValue.textContent = '—';
+      uidValue.title = '';
       tokenValue.textContent = 'Không lấy được';
       tokenValue.dataset.full = '';
-      appendLog('[FAIL] ' + (result.error || 'Cookie hết hạn'));
-      showStatus(result.error || 'Cookie hết hạn / không lấy được token', 'error');
+      tokenValue.title = '';
+      appendLog('[FAIL] ' + (result.error || 'Cookie không đăng nhập được'));
+      showStatus(result.error || 'Cookie không đăng nhập được', 'error');
     }
   } catch (err) {
     showStatus('Lỗi: ' + err.message, 'error');
