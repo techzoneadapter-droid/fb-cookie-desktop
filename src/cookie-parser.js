@@ -136,6 +136,21 @@
     return bestScore >= 0 ? best.trim() : '';
   }
 
+  function parseAccountCookieLine(input) {
+    const raw = String(input ?? '').replace(/^\uFEFF/, '').trim();
+    if (!raw.includes('|')) return { recognized: false, uid: null, cookies: [] };
+
+    // Account exports begin with UID|password. Keep only UID and cookies;
+    // password, 2FA secret, email and all other fields are discarded.
+    const separator = raw.indexOf('|');
+    const uid = raw.slice(0, separator).trim();
+    if (!/^\d{3,32}$/.test(uid)) return { recognized: false, uid: null, cookies: [] };
+
+    const cookieSegment = extractCookieSegment(raw);
+    const cookies = cookieSegment ? parseCookieText(cookieSegment) : [];
+    return { recognized: true, uid, cookies, hasCookie: cookies.length > 0 };
+  }
+
   function stripValueQuotes(value) {
     let result = String(value || '').trim();
     if (result.length >= 2 && ((result[0] === '"' && result[result.length - 1] === '"') ||
@@ -322,5 +337,11 @@
     return dedupe(parsePairs(candidate));
   }
 
-  return { parseCookieText, parseCookieObject, normalizeCookie, extractCookieSegment };
+  return {
+    parseCookieText,
+    parseCookieObject,
+    normalizeCookie,
+    extractCookieSegment,
+    parseAccountCookieLine
+  };
 });

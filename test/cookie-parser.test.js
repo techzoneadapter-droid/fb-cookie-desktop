@@ -1,5 +1,5 @@
 const assert = require('node:assert/strict');
-const { parseCookieText, extractCookieSegment } = require('../src/cookie-parser');
+const { parseCookieText, extractCookieSegment, parseAccountCookieLine } = require('../src/cookie-parser');
 
 function values(input) {
   return Object.fromEntries(parseCookieText(input).map(cookie => [cookie.name, cookie.value]));
@@ -58,5 +58,31 @@ assert.deepEqual(values(accountPasswordCookieLine), {
 assert.deepEqual(values('account@example.test|password=never-import-this|c_user=123; xs=session-value'), {
   c_user: '123', xs: 'session-value'
 });
+
+const accountWith2fa = parseAccountCookieLine(
+  '100012345678901|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|c_user=100012345678901; xs=session-value; fr=tracking'
+);
+assert.equal(accountWith2fa.recognized, true);
+assert.equal(accountWith2fa.uid, '100012345678901');
+assert.deepEqual(Object.keys(accountWith2fa).sort(), ['cookies', 'hasCookie', 'recognized', 'uid']);
+assert.deepEqual(Object.fromEntries(accountWith2fa.cookies.map(cookie => [cookie.name, cookie.value])), {
+  c_user: '100012345678901', xs: 'session-value', fr: 'tracking'
+});
+
+const accountWithMail = parseAccountCookieLine(
+  '100012345678902|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|owner@example.test|datr=device; c_user=100012345678902; xs=second-session'
+);
+assert.equal(accountWithMail.recognized, true);
+assert.equal(accountWithMail.uid, '100012345678902');
+assert.deepEqual(Object.fromEntries(accountWithMail.cookies.map(cookie => [cookie.name, cookie.value])), {
+  datr: 'device', c_user: '100012345678902', xs: 'second-session'
+});
+
+const accountWithoutCookie = parseAccountCookieLine(
+  '100012345678903|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|owner@example.test'
+);
+assert.equal(accountWithoutCookie.recognized, true);
+assert.equal(accountWithoutCookie.hasCookie, false);
+assert.deepEqual(accountWithoutCookie.cookies, []);
 
 console.log('cookie-parser: all tests passed');

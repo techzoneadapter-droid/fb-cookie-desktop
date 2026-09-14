@@ -74,7 +74,7 @@ window.electronAPI.onBatchStart((data) => {
   collectedTokens = [];
   tokenArea.value = '';
   tokenCount.textContent = '0';
-  appendLog('===== BẮT ĐẦU BATCH: ' + data.total + ' cookie =====');
+  appendLog('===== BẮT ĐẦU BATCH: ' + data.total + ' tài khoản/cookie =====');
   progressBar.classList.add('show');
   progressFill.style.width = '0%';
   startBatchBtn.disabled = true;
@@ -97,13 +97,21 @@ window.electronAPI.onTokenObtained((data) => {
 });
 
 window.electronAPI.onBatchDone((data) => {
-  appendLog('===== HOÀN TẤT =====');
-  appendLog('Thành công: ' + data.success + ' | Thất bại: ' + data.fail + ' | Tổng: ' + data.total);
-  progressFill.style.width = '100%';
+  appendLog(data.stopped ? '===== ĐÃ DỪNG =====' : '===== HOÀN TẤT =====');
+  appendLog(
+    'Đã xử lý: ' + data.processed + '/' + data.total +
+    ' | Đăng nhập được: ' + data.authenticated +
+    ' | Có token: ' + data.success +
+    ' | Thất bại: ' + data.fail
+  );
+  progressFill.style.width = Math.round((data.processed / data.total) * 100) + '%';
   startBatchBtn.disabled = false;
   stopBatchBtn.disabled = true;
   importBtn.disabled = false;
-  showStatus('Batch xong: ' + data.success + ' token lấy được', data.success > 0 ? 'success' : 'error');
+  showStatus(
+    (data.stopped ? 'Đã dừng' : 'Batch xong') + ': ' + data.authenticated + ' đăng nhập, ' + data.success + ' token',
+    data.authenticated > 0 ? 'success' : 'error'
+  );
 });
 
 loginBtn.addEventListener('click', async () => {
@@ -175,9 +183,9 @@ importBtn.addEventListener('click', async () => {
   }
   selectedFilePath = filePath;
   const name = filePath.split(/[/\\]/).pop();
-  fileInfo.textContent = name + ' → ' + parsed.count + ' cookie';
+  fileInfo.textContent = name + ' → ' + parsed.count + ' dòng (' + parsed.validCount + ' có cookie, ' + parsed.invalidCount + ' lỗi)';
   startBatchBtn.disabled = parsed.count === 0;
-  showStatus('Đã load ' + parsed.count + ' cookie từ file', 'info');
+  showStatus('Đã đọc ' + parsed.count + ' dòng; dữ liệu nhạy cảm chỉ được xử lý cục bộ', 'info');
 });
 
 startBatchBtn.addEventListener('click', async () => {

@@ -1,11 +1,12 @@
 {
   "name": "fb-cookie-token-tool",
-  "version": "1.4.9",
+  "version": "1.4.10",
   "description": "FB Cookie & Access Token Tool - Chi dung cho Facebook",
   "main": "main.js",
   "author": "Local Tool",
   "license": "MIT",
   "scripts": {
+    "test": "node test/cookie-parser.test.js",
     "start": "electron .",
     "build": "electron-builder --win --x64",
     "build:dir": "electron-builder --win --x64 --dir",

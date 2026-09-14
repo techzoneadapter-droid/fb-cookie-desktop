@@ -2,7 +2,7 @@ const { app, BrowserWindow, session, ipcMain, clipboard, dialog, screen } = requ
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { parseCookieText, extractCookieSegment } = require('./src/cookie-parser');
+const { parseCookieText, extractCookieSegment, parseAccountCookieLine } = require('./src/cookie-parser');
 
 // Partition không persist: cookie/token chỉ tồn tại trong phiên chạy hiện tại, không ghi vào hồ sơ trình duyệt mặc định.
 const FACEBOOK_PARTITION = 'facebook-auth-private';
@@ -432,6 +432,19 @@ function parseMultipleCookiesFromText(text) {
       continue;
     }
 
+    const account = parseAccountCookieLine(trimmed);
+    if (account.recognized) {
+      const hasSession = account.cookies.some(cookie =>
+        ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(cookie.name.toLowerCase())
+      );
+      results.push({
+        cookies: hasSession ? account.cookies : [],
+        type: hasSession ? 'account-cookie' : 'invalid-account',
+        uid: account.uid
+      });
+      continue;
+    }
+
     const cookieStr = extractCookieSegment(trimmed);
     const cookies = parseCookieText(cookieStr);
     const hasSession = cookies.some(c => ['c_user', 'xs', 'fr', 'datr', 'sb'].includes(c.name.toLowerCase()));
@@ -501,7 +514,8 @@ ipcMain.handle('select-cookie-file', async () => {
 ipcMain.handle('parse-cookie-file', async (e, filePath) => {
   try {
     const items = parseMultipleCookiesFromText(fs.readFileSync(filePath, 'utf8'));
-    return { success: true, count: items.length };
+    const validCount = items.filter(item => item.cookies && item.cookies.length).length;
+    return { success: true, count: items.length, validCount, invalidCount: items.length - validCount };
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -523,24 +537,42 @@ ipcMain.handle('start-batch', async (e, filePath) => {
     // Pre-create window
     await ensureHiddenWindow();
 
-    let successCount = 0, failCount = 0;
+    let authenticatedCount = 0, tokenCount = 0, failCount = 0, processedCount = 0;
     const tokens = [];
 
     for (let i = 0; i < items.length; i++) {
       if (shouldStopBatch) break;
 
       const item = items[i];
+      processedCount++;
       sendToRenderer('batch-progress', {
         current: i + 1,
         total: items.length,
-        message: `${i + 1}/${items.length}`
+        message: `Đang xử lý ${i + 1}/${items.length}${item.uid ? ` | UID: ${item.uid}` : ''}`
       });
 
-      if (item.type === 'invitation' || !item.cookies || !item.cookies.length) {
+      if (item.type === 'invitation' || item.type === 'invalid-account' || !item.cookies || !item.cookies.length) {
         failCount++;
+        const reason = item.type === 'invitation'
+          ? 'Bỏ qua dòng invitation'
+          : (item.type === 'invalid-account'
+            ? 'Không tìm thấy cookie Facebook trong dòng tài khoản'
+            : 'Cookie không hợp lệ');
         sendToRenderer('batch-line', {
           index: i + 1, status: 'fail',
-          message: `[${i + 1}] ${item.type === 'invitation' ? 'Bỏ qua invitation' : 'Cookie không hợp lệ'}`
+          message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | ${reason}`
+        });
+        continue;
+      }
+
+      const cookieNames = new Set(item.cookies.map(cookie => String(cookie.name || '').trim().toLowerCase()));
+      const missing = ['c_user', 'xs'].filter(name => !cookieNames.has(name));
+      if (missing.length) {
+        failCount++;
+        sendToRenderer('batch-line', {
+          index: i + 1,
+          status: 'fail',
+          message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | Cookie thiếu ${missing.join(' và ')}`
         });
         continue;
       }
@@ -555,23 +587,37 @@ ipcMain.handle('start-batch', async (e, filePath) => {
 
       const result = await fetchTokenFast();
 
-      if (result.success && result.token) {
-        successCount++;
-        tokens.push(result.token);
+      if (result.authenticated) {
+        authenticatedCount++;
         const uid = result.uid || item.uid || 'N/A';
-        sendToRenderer('batch-line', {
-          index: i + 1, status: 'success',
-          message: `[${i + 1}] OK | UID: ${uid}`
-        });
-        sendToRenderer('token-obtained', { index: i + 1, uid, token: result.token });
+        if (result.token) {
+          tokenCount++;
+          tokens.push(result.token);
+          sendToRenderer('batch-line', {
+            index: i + 1, status: 'success',
+            message: `[${i + 1}] OK | UID: ${uid} | Đăng nhập thành công, đã lấy token từ Ads Manager`
+          });
+          sendToRenderer('token-obtained', { index: i + 1, uid, token: result.token });
+        } else {
+          sendToRenderer('batch-line', {
+            index: i + 1, status: 'warning',
+            message: `[${i + 1}] LOGIN OK | UID: ${uid} | Đã vào Ads Manager nhưng chưa tìm thấy Access Token`
+          });
+        }
       } else {
         failCount++;
-        const reason = result.isLoginPage || (result.error && result.error.includes('hết hạn'))
-          ? 'Cookie hết hạn'
-          : (result.error || 'Không tìm thấy Access Token');
+        const reasonByStatus = {
+          not_logged_in: 'Cookie sai, thiếu hoặc đã hết hạn',
+          checkpoint: 'Facebook yêu cầu xác minh/checkpoint',
+          restricted: 'Tài khoản bị khóa hoặc hạn chế',
+          timeout: 'Facebook không phản hồi sau 12 giây',
+          navigation_error: 'Không mở được Ads Manager',
+          page_error: 'Không kiểm tra được trạng thái trang Facebook'
+        };
+        const reason = reasonByStatus[result.authStatus] || result.error || 'Đăng nhập không thành công';
         sendToRenderer('batch-line', {
           index: i + 1, status: 'fail',
-          message: `[${i + 1}] ${reason}`
+          message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | ${reason}`
         });
       }
 
@@ -580,8 +626,25 @@ ipcMain.handle('start-batch', async (e, filePath) => {
     }
 
     isBatchRunning = false;
-    sendToRenderer('batch-done', { total: items.length, success: successCount, fail: failCount, tokens });
-    return { success: true, total: items.length, successCount, failCount };
+    const stopped = shouldStopBatch && processedCount < items.length;
+    sendToRenderer('batch-done', {
+      total: items.length,
+      processed: processedCount,
+      authenticated: authenticatedCount,
+      success: tokenCount,
+      fail: failCount,
+      stopped,
+      tokens
+    });
+    return {
+      success: true,
+      total: items.length,
+      processedCount,
+      authenticatedCount,
+      tokenCount,
+      failCount,
+      stopped
+    };
   } catch (err) {
     isBatchRunning = false;
     return { success: false, error: err.message };
