@@ -140,15 +140,20 @@
     const raw = String(input ?? '').replace(/^\uFEFF/, '').trim();
     if (!raw.includes('|')) return { recognized: false, uid: null, cookies: [] };
 
-    // Account exports begin with UID|password. Keep only UID and cookies;
-    // password, 2FA secret, email and all other fields are discarded.
-    const separator = raw.indexOf('|');
-    const uid = raw.slice(0, separator).trim();
-    if (!/^\d{3,32}$/.test(uid)) return { recognized: false, uid: null, cookies: [] };
+    // Mục 3 chỉ nhận UID|password|2FA. Tất cả field phía sau (kể cả cookie)
+    // bị bỏ qua tuyệt đối; password và 2FA chỉ được kiểm tra có mặt rồi hủy ngay.
+    const firstSeparator = raw.indexOf('|');
+    const secondSeparator = raw.indexOf('|', firstSeparator + 1);
+    const thirdSeparator = raw.indexOf('|', secondSeparator + 1);
+    if (secondSeparator < 0) return { recognized: false, uid: null, cookies: [] };
 
-    const cookieSegment = extractCookieSegment(raw);
-    const cookies = cookieSegment ? parseCookieText(cookieSegment) : [];
-    return { recognized: true, uid, cookies, hasCookie: cookies.length > 0 };
+    const uid = raw.slice(0, firstSeparator).trim();
+    const password = raw.slice(firstSeparator + 1, secondSeparator).trim();
+    const twoFactor = raw.slice(secondSeparator + 1, thirdSeparator < 0 ? raw.length : thirdSeparator).trim();
+    if (!/^\d{3,32}$/.test(uid)) return { recognized: false, uid: null, cookies: [] };
+    if (!password || !twoFactor) return { recognized: false, uid: null, cookies: [] };
+
+    return { recognized: true, uid, cookies: [], hasCookie: false };
   }
 
   function parseAccountCookieFile(input) {
@@ -164,12 +169,9 @@
         if (!account.recognized) {
           return { cookies: [], type: 'invalid-account-format', uid: null };
         }
-        const hasSession = account.cookies.some(cookie =>
-          FACEBOOK_COOKIE_MARKERS.has(cookie.name.toLowerCase())
-        );
         return {
-          cookies: hasSession ? account.cookies : [],
-          type: hasSession ? 'account-cookie' : 'invalid-account',
+          cookies: [],
+          type: 'invalid-account',
           uid: account.uid
         };
       });

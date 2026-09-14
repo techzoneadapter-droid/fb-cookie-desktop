@@ -70,18 +70,16 @@ const accountWith2fa = parseAccountCookieLine(
 assert.equal(accountWith2fa.recognized, true);
 assert.equal(accountWith2fa.uid, '100012345678901');
 assert.deepEqual(Object.keys(accountWith2fa).sort(), ['cookies', 'hasCookie', 'recognized', 'uid']);
-assert.deepEqual(Object.fromEntries(accountWith2fa.cookies.map(cookie => [cookie.name, cookie.value])), {
-  c_user: '100012345678901', xs: 'session-value', fr: 'tracking'
-});
+assert.equal(accountWith2fa.hasCookie, false);
+assert.deepEqual(accountWith2fa.cookies, []);
 
 const accountWithMail = parseAccountCookieLine(
   '100012345678902|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|owner@example.test|datr=device; c_user=100012345678902; xs=second-session'
 );
 assert.equal(accountWithMail.recognized, true);
 assert.equal(accountWithMail.uid, '100012345678902');
-assert.deepEqual(Object.fromEntries(accountWithMail.cookies.map(cookie => [cookie.name, cookie.value])), {
-  datr: 'device', c_user: '100012345678902', xs: 'second-session'
-});
+assert.equal(accountWithMail.hasCookie, false);
+assert.deepEqual(accountWithMail.cookies, []);
 
 const accountWithoutCookie = parseAccountCookieLine(
   '100012345678903|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|owner@example.test'
@@ -98,7 +96,7 @@ const accountFile = parseAccountCookieFile([
 ].join('\n'));
 assert.equal(accountFile.length, 3);
 assert.deepEqual(accountFile.map(item => item.type), [
-  'account-cookie', 'invalid-account-format', 'invalid-account'
+  'invalid-account', 'invalid-account-format', 'invalid-account'
 ]);
 assert.equal(JSON.stringify(accountFile).includes('secret-password'), false);
 assert.equal(JSON.stringify(accountFile).includes('PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW'), false);
