@@ -88,6 +88,12 @@
     .btn-red:hover:not(:disabled) { background: #c0392b; }
     .btn-sm { padding: 5px 10px; font-size: 12px; }
     .file-info { font-size: 12px; color: #65676b; margin-top: 6px; word-break: break-all; }
+    .batch-section {
+      margin-top: 14px; padding: 10px; border: 1px solid #d8dde5;
+      border-radius: 9px; background: #f8f9fb;
+    }
+    .batch-section.account { border-color: #b9d6ff; background: #f2f7ff; }
+    .batch-title { font-size: 13px; font-weight: 700; color: #3f4650; margin-bottom: 6px; }
     .progress-bar {
       height: 6px; background: #e4e6eb; border-radius: 3px; margin-top: 8px; overflow: hidden; display: none;
     }
@@ -152,15 +158,28 @@
         </div>
         <a href="#" class="link-fb" id="fbLink">Mở Ads Manager</a>
 
-        <div style="font-size:13px;font-weight:600;color:#606770;margin:14px 0 6px;">2. Import file tài khoản/cookie (batch ngầm)</div>
-        <div class="btn-row">
-          <button class="btn-green" id="importBtn">Chọn file</button>
-          <button class="btn-primary" id="startBatchBtn" disabled>Bắt đầu</button>
-          <button class="btn-red" id="stopBatchBtn" disabled>Dừng</button>
+        <div class="batch-section">
+          <div class="batch-title">2. Batch cookie</div>
+          <div class="btn-row">
+            <button class="btn-green" id="importBtn">Chọn file</button>
+            <button class="btn-primary" id="startBatchBtn" disabled>Bắt đầu</button>
+            <button class="btn-red" id="stopBatchBtn" disabled>Dừng</button>
+          </div>
+          <div class="file-info" id="fileInfo">Chưa chọn file cookie</div>
+          <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
         </div>
-        <div class="file-info" id="fileInfo">Chưa chọn file</div>
-        <div class="file-info">Hỗ trợ: UID|Mật khẩu|2FA|cookie hoặc UID|Mật khẩu|2FA|mail|cookie. Chỉ UID và cookie được dùng; mật khẩu, 2FA và mail không được lưu hay hiển thị.</div>
-        <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+
+        <div class="batch-section account">
+          <div class="batch-title">3. Batch tài khoản</div>
+          <div class="btn-row">
+            <button class="btn-green" id="accountImportBtn">Chọn file</button>
+            <button class="btn-primary" id="accountStartBatchBtn" disabled>Bắt đầu</button>
+            <button class="btn-red" id="accountStopBatchBtn" disabled>Dừng</button>
+          </div>
+          <div class="file-info" id="accountFileInfo">Chưa chọn file tài khoản</div>
+          <div class="file-info">UID|Mật khẩu|2FA|cookie hoặc UID|Mật khẩu|2FA|mail|cookie. Chỉ UID và cookie được dùng.</div>
+          <div class="progress-bar" id="accountProgressBar"><div class="progress-fill" id="accountProgressFill"></div></div>
+        </div>
 
         <div style="font-size:13px;font-weight:600;color:#606770;margin:14px 0 6px;">Cookie hiện tại</div>
         <div class="info-row">

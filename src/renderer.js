@@ -8,6 +8,12 @@ const stopBatchBtn = document.getElementById('stopBatchBtn');
 const fileInfo = document.getElementById('fileInfo');
 const progressBar = document.getElementById('progressBar');
 const progressFill = document.getElementById('progressFill');
+const accountImportBtn = document.getElementById('accountImportBtn');
+const accountStartBatchBtn = document.getElementById('accountStartBatchBtn');
+const accountStopBatchBtn = document.getElementById('accountStopBatchBtn');
+const accountFileInfo = document.getElementById('accountFileInfo');
+const accountProgressBar = document.getElementById('accountProgressBar');
+const accountProgressFill = document.getElementById('accountProgressFill');
 const logArea = document.getElementById('logArea');
 const tokenArea = document.getElementById('tokenArea');
 const tokenCount = document.getElementById('tokenCount');
@@ -20,6 +26,7 @@ const uidValue = document.getElementById('uidValue');
 const tokenValue = document.getElementById('tokenValue');
 
 let selectedFilePath = null;
+let selectedAccountFilePath = null;
 let collectedTokens = [];
 
 function showStatus(message, type = 'info') {
@@ -71,20 +78,25 @@ fbLink.addEventListener('click', async (e) => {
 window.electronAPI.onStatusUpdate((data) => showStatus(data.message, data.type || 'info'));
 
 window.electronAPI.onBatchStart((data) => {
+  const accountMode = data.mode === 'account';
   collectedTokens = [];
   tokenArea.value = '';
   tokenCount.textContent = '0';
-  appendLog('===== BẮT ĐẦU BATCH: ' + data.total + ' tài khoản/cookie =====');
-  progressBar.classList.add('show');
-  progressFill.style.width = '0%';
+  appendLog('===== BẮT ĐẦU ' + (accountMode ? 'BATCH TÀI KHOẢN' : 'BATCH COOKIE') + ': ' + data.total + ' =====');
+  progressBar.classList.toggle('show', !accountMode);
+  accountProgressBar.classList.toggle('show', accountMode);
+  (accountMode ? accountProgressFill : progressFill).style.width = '0%';
   startBatchBtn.disabled = true;
-  stopBatchBtn.disabled = false;
+  accountStartBatchBtn.disabled = true;
+  stopBatchBtn.disabled = accountMode;
+  accountStopBatchBtn.disabled = !accountMode;
   importBtn.disabled = true;
+  accountImportBtn.disabled = true;
 });
 
 window.electronAPI.onBatchProgress((data) => {
   const pct = Math.round((data.current / data.total) * 100);
-  progressFill.style.width = pct + '%';
+  (data.mode === 'account' ? accountProgressFill : progressFill).style.width = pct + '%';
   showStatus(data.message, 'info');
 });
 
@@ -104,10 +116,14 @@ window.electronAPI.onBatchDone((data) => {
     ' | Có token: ' + data.success +
     ' | Thất bại: ' + data.fail
   );
-  progressFill.style.width = Math.round((data.processed / data.total) * 100) + '%';
-  startBatchBtn.disabled = false;
+  (data.mode === 'account' ? accountProgressFill : progressFill).style.width =
+    Math.round((data.processed / data.total) * 100) + '%';
+  startBatchBtn.disabled = !selectedFilePath;
+  accountStartBatchBtn.disabled = !selectedAccountFilePath;
   stopBatchBtn.disabled = true;
+  accountStopBatchBtn.disabled = true;
   importBtn.disabled = false;
+  accountImportBtn.disabled = false;
   showStatus(
     (data.stopped ? 'Đã dừng' : 'Batch xong') + ': ' + data.authenticated + ' đăng nhập, ' + data.success + ' token',
     data.authenticated > 0 ? 'success' : 'error'
@@ -183,9 +199,9 @@ importBtn.addEventListener('click', async () => {
   }
   selectedFilePath = filePath;
   const name = filePath.split(/[/\\]/).pop();
-  fileInfo.textContent = name + ' → ' + parsed.count + ' dòng (' + parsed.validCount + ' có cookie, ' + parsed.invalidCount + ' lỗi)';
+  fileInfo.textContent = name + ' → ' + parsed.validCount + ' cookie hợp lệ';
   startBatchBtn.disabled = parsed.count === 0;
-  showStatus('Đã đọc ' + parsed.count + ' dòng; dữ liệu nhạy cảm chỉ được xử lý cục bộ', 'info');
+  showStatus('Đã đọc file cookie: ' + parsed.validCount + ' mục hợp lệ', 'info');
 });
 
 startBatchBtn.addEventListener('click', async () => {
@@ -194,15 +210,54 @@ startBatchBtn.addEventListener('click', async () => {
   const result = await window.electronAPI.startBatch(selectedFilePath);
   if (!result.success && result.error) {
     showStatus(result.error, 'error');
-    startBatchBtn.disabled = false;
+    startBatchBtn.disabled = !selectedFilePath;
+    accountStartBatchBtn.disabled = !selectedAccountFilePath;
     stopBatchBtn.disabled = true;
+    accountStopBatchBtn.disabled = true;
     importBtn.disabled = false;
+    accountImportBtn.disabled = false;
   }
 });
 
 stopBatchBtn.addEventListener('click', async () => {
   await window.electronAPI.stopBatch();
-  showStatus('Đang dừng batch...', 'info');
+  showStatus('Đang dừng batch cookie...', 'info');
+});
+
+accountImportBtn.addEventListener('click', async () => {
+  const filePath = await window.electronAPI.selectAccountFile();
+  if (!filePath) return;
+  const parsed = await window.electronAPI.parseAccountFile(filePath);
+  if (!parsed.success) {
+    showStatus('Lỗi đọc file tài khoản: ' + parsed.error, 'error');
+    return;
+  }
+  selectedAccountFilePath = filePath;
+  const name = filePath.split(/[/\\]/).pop();
+  accountFileInfo.textContent = name + ' → ' + parsed.count + ' dòng (' +
+    parsed.validCount + ' có cookie, ' + parsed.invalidCount + ' lỗi)';
+  accountStartBatchBtn.disabled = parsed.count === 0;
+  showStatus('Đã đọc file tài khoản; mật khẩu, 2FA và mail không được lưu', 'info');
+});
+
+accountStartBatchBtn.addEventListener('click', async () => {
+  if (!selectedAccountFilePath) return;
+  logArea.value = '';
+  const result = await window.electronAPI.startAccountBatch(selectedAccountFilePath);
+  if (!result.success && result.error) {
+    showStatus(result.error, 'error');
+    startBatchBtn.disabled = !selectedFilePath;
+    accountStartBatchBtn.disabled = !selectedAccountFilePath;
+    stopBatchBtn.disabled = true;
+    accountStopBatchBtn.disabled = true;
+    importBtn.disabled = false;
+    accountImportBtn.disabled = false;
+  }
+});
+
+accountStopBatchBtn.addEventListener('click', async () => {
+  await window.electronAPI.stopAccountBatch();
+  showStatus('Đang dừng batch tài khoản...', 'info');
 });
 
 copyLogBtn.addEventListener('click', async () => {

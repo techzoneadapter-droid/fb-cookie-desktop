@@ -151,6 +151,30 @@
     return { recognized: true, uid, cookies, hasCookie: cookies.length > 0 };
   }
 
+  function parseAccountCookieFile(input) {
+    const raw = String(input ?? '').replace(/^\uFEFF/, '').trim();
+    if (!raw) return [];
+    if (raw.length > MAX_INPUT_LENGTH) throw new Error('Dữ liệu tài khoản vượt quá giới hạn an toàn 2 MB');
+
+    return raw.split(/\r?\n/)
+      .map(line => line.trim())
+      .filter(line => line && !line.startsWith('#'))
+      .map(line => {
+        const account = parseAccountCookieLine(line);
+        if (!account.recognized) {
+          return { cookies: [], type: 'invalid-account-format', uid: null };
+        }
+        const hasSession = account.cookies.some(cookie =>
+          FACEBOOK_COOKIE_MARKERS.has(cookie.name.toLowerCase())
+        );
+        return {
+          cookies: hasSession ? account.cookies : [],
+          type: hasSession ? 'account-cookie' : 'invalid-account',
+          uid: account.uid
+        };
+      });
+  }
+
   function stripValueQuotes(value) {
     let result = String(value || '').trim();
     if (result.length >= 2 && ((result[0] === '"' && result[result.length - 1] === '"') ||
@@ -342,6 +366,7 @@
     parseCookieObject,
     normalizeCookie,
     extractCookieSegment,
-    parseAccountCookieLine
+    parseAccountCookieLine,
+    parseAccountCookieFile
   };
 });

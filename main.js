@@ -2,7 +2,12 @@ const { app, BrowserWindow, session, ipcMain, clipboard, dialog, screen } = requ
 const path = require('path');
 const fs = require('fs');
 const { autoUpdater } = require('electron-updater');
-const { parseCookieText, extractCookieSegment, parseAccountCookieLine } = require('./src/cookie-parser');
+const {
+  parseCookieText,
+  extractCookieSegment,
+  parseAccountCookieLine,
+  parseAccountCookieFile
+} = require('./src/cookie-parser');
 
 // Partition không persist: cookie/token chỉ tồn tại trong phiên chạy hiện tại, không ghi vào hồ sơ trình duyệt mặc định.
 const FACEBOOK_PARTITION = 'facebook-auth-private';
@@ -511,6 +516,15 @@ ipcMain.handle('select-cookie-file', async () => {
   return r.canceled ? null : r.filePaths[0];
 });
 
+ipcMain.handle('select-account-file', async () => {
+  const r = await dialog.showOpenDialog(mainWindow, {
+    title: 'Chọn file tài khoản có cookie',
+    filters: [{ name: 'Text', extensions: ['txt', 'csv', 'log'] }, { name: 'All', extensions: ['*'] }],
+    properties: ['openFile']
+  });
+  return r.canceled ? null : r.filePaths[0];
+});
+
 ipcMain.handle('parse-cookie-file', async (e, filePath) => {
   try {
     const items = parseMultipleCookiesFromText(fs.readFileSync(filePath, 'utf8'));
@@ -521,19 +535,32 @@ ipcMain.handle('parse-cookie-file', async (e, filePath) => {
   }
 });
 
-ipcMain.handle('start-batch', async (e, filePath) => {
+ipcMain.handle('parse-account-file', async (e, filePath) => {
+  try {
+    const items = parseAccountCookieFile(fs.readFileSync(filePath, 'utf8'));
+    const validCount = items.filter(item => item.cookies && item.cookies.length).length;
+    return { success: true, count: items.length, validCount, invalidCount: items.length - validCount };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+});
+
+async function runBatch(filePath, parseFile, mode) {
   if (isBatchRunning) return { success: false, error: 'Đang chạy' };
   isBatchRunning = true;
   shouldStopBatch = false;
 
   try {
-    const items = parseMultipleCookiesFromText(fs.readFileSync(filePath, 'utf8'));
+    const items = parseFile(fs.readFileSync(filePath, 'utf8'));
     if (!items.length) {
       isBatchRunning = false;
-      return { success: false, error: 'Không tìm thấy cookie hợp lệ' };
+      return {
+        success: false,
+        error: mode === 'account' ? 'Không tìm thấy dòng tài khoản' : 'Không tìm thấy cookie hợp lệ'
+      };
     }
 
-    sendToRenderer('batch-start', { total: items.length });
+    sendToRenderer('batch-start', { total: items.length, mode });
     // Pre-create window
     await ensureHiddenWindow();
 
@@ -548,16 +575,20 @@ ipcMain.handle('start-batch', async (e, filePath) => {
       sendToRenderer('batch-progress', {
         current: i + 1,
         total: items.length,
+        mode,
         message: `Đang xử lý ${i + 1}/${items.length}${item.uid ? ` | UID: ${item.uid}` : ''}`
       });
 
-      if (item.type === 'invitation' || item.type === 'invalid-account' || !item.cookies || !item.cookies.length) {
+      if (item.type === 'invitation' || item.type === 'invalid-account' ||
+          item.type === 'invalid-account-format' || !item.cookies || !item.cookies.length) {
         failCount++;
         const reason = item.type === 'invitation'
           ? 'Bỏ qua dòng invitation'
           : (item.type === 'invalid-account'
             ? 'Không tìm thấy cookie Facebook trong dòng tài khoản'
-            : 'Cookie không hợp lệ');
+            : (item.type === 'invalid-account-format'
+              ? 'Sai định dạng UID|Mật khẩu|...|cookie'
+              : 'Cookie không hợp lệ'));
         sendToRenderer('batch-line', {
           index: i + 1, status: 'fail',
           message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | ${reason}`
@@ -634,6 +665,7 @@ ipcMain.handle('start-batch', async (e, filePath) => {
       success: tokenCount,
       fail: failCount,
       stopped,
+      mode,
       tokens
     });
     return {
@@ -649,9 +681,20 @@ ipcMain.handle('start-batch', async (e, filePath) => {
     isBatchRunning = false;
     return { success: false, error: err.message };
   }
-});
+}
+
+ipcMain.handle('start-batch', async (e, filePath) =>
+  await runBatch(filePath, parseMultipleCookiesFromText, 'cookie'));
+
+ipcMain.handle('start-account-batch', async (e, filePath) =>
+  await runBatch(filePath, parseAccountCookieFile, 'account'));
 
 ipcMain.handle('stop-batch', async () => {
+  shouldStopBatch = true;
+  return true;
+});
+
+ipcMain.handle('stop-account-batch', async () => {
   shouldStopBatch = true;
   return true;
 });

@@ -1,5 +1,10 @@
 const assert = require('node:assert/strict');
-const { parseCookieText, extractCookieSegment, parseAccountCookieLine } = require('../src/cookie-parser');
+const {
+  parseCookieText,
+  extractCookieSegment,
+  parseAccountCookieLine,
+  parseAccountCookieFile
+} = require('../src/cookie-parser');
 
 function values(input) {
   return Object.fromEntries(parseCookieText(input).map(cookie => [cookie.name, cookie.value]));
@@ -84,5 +89,18 @@ const accountWithoutCookie = parseAccountCookieLine(
 assert.equal(accountWithoutCookie.recognized, true);
 assert.equal(accountWithoutCookie.hasCookie, false);
 assert.deepEqual(accountWithoutCookie.cookies, []);
+
+const accountFile = parseAccountCookieFile([
+  '# ignored comment',
+  '100012345678901|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|c_user=100012345678901; xs=session-value',
+  'not-an-account-line',
+  '100012345678903|secret-password|PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW|owner@example.test'
+].join('\n'));
+assert.equal(accountFile.length, 3);
+assert.deepEqual(accountFile.map(item => item.type), [
+  'account-cookie', 'invalid-account-format', 'invalid-account'
+]);
+assert.equal(JSON.stringify(accountFile).includes('secret-password'), false);
+assert.equal(JSON.stringify(accountFile).includes('PY4KOGOYWT72H36YJQQYFKPYXFGGBVEW'), false);
 
 console.log('cookie-parser: all tests passed');
