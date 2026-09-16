@@ -94,6 +94,22 @@
     }
     .batch-section.account { border-color: #b9d6ff; background: #f2f7ff; }
     .batch-title { font-size: 13px; font-weight: 700; color: #3f4650; margin-bottom: 6px; }
+    .parallel-settings {
+      margin-top: 10px; padding-top: 9px; border-top: 1px solid #d8dde5;
+    }
+    .toggle-row {
+      display: flex; align-items: center; gap: 8px; font-size: 12px;
+      font-weight: 600; color: #3f4650; cursor: pointer;
+    }
+    .toggle-row input { width: 16px; height: 16px; accent-color: #1877f2; }
+    .worker-url-config { margin-top: 8px; }
+    .worker-url-config[hidden] { display: none; }
+    .worker-url-label { display: block; font-size: 11px; color: #65676b; margin-bottom: 4px; }
+    #secondWorkerUrl {
+      width: 100%; padding: 8px; border: 1.5px solid #ccd0d5; border-radius: 7px;
+      font-size: 11px; font-family: Consolas, Monaco, monospace; outline: none;
+    }
+    #secondWorkerUrl:focus { border-color: #1877f2; }
     .progress-bar {
       height: 6px; background: #e4e6eb; border-radius: 3px; margin-top: 8px; overflow: hidden; display: none;
     }
@@ -167,6 +183,17 @@
           </div>
           <div class="file-info" id="fileInfo">Chưa chọn file cookie</div>
           <div class="progress-bar" id="progressBar"><div class="progress-fill" id="progressFill"></div></div>
+          <div class="parallel-settings">
+            <label class="toggle-row">
+              <input type="checkbox" id="secondWorkerToggle">
+              <span>Bật luồng xử lý thứ 2</span>
+            </label>
+            <div class="worker-url-config" id="secondWorkerConfig" hidden>
+              <label class="worker-url-label" for="secondWorkerUrl">Link chạy vào của luồng thứ 2</label>
+              <input type="url" id="secondWorkerUrl" value="https://adsmanager.facebook.com/adsmanager/manage/campaigns/" spellcheck="false">
+              <div class="file-info">Chỉ chấp nhận liên kết HTTPS thuộc Facebook.</div>
+            </div>
+          </div>
         </div>
 
         <div class="batch-section account">

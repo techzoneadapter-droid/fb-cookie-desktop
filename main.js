@@ -11,11 +11,12 @@ const {
 
 // Partition không persist: cookie/token chỉ tồn tại trong phiên chạy hiện tại, không ghi vào hồ sơ trình duyệt mặc định.
 const FACEBOOK_PARTITION = 'facebook-auth-private';
+const BATCH_CONCURRENCY = 2;
 const FACEBOOK_ENTRY_URL = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns/';
 const FACEBOOK_WEB_DOMAINS = ['facebook.com', 'fb.com', 'facebook.net', 'fbcdn.net', 'fbsbx.com'];
 const FACEBOOK_COOKIE_DOMAINS = ['facebook.com', 'fb.com'];
 let facebookSession = null;
-let facebookNetworkGuardInstalled = false;
+const guardedFacebookSessions = new WeakSet();
 
 function isDomainOrSubdomain(host, allowedDomain) {
   return host === allowedDomain || host.endsWith('.' + allowedDomain);
@@ -47,17 +48,27 @@ function normalizeFacebookCookieDomain(rawDomain) {
   return original.startsWith('.') ? '.' + host : host;
 }
 
-function getFacebookSession() {
-  if (!facebookSession) facebookSession = session.fromPartition(FACEBOOK_PARTITION);
-  if (!facebookNetworkGuardInstalled) {
-    facebookNetworkGuardInstalled = true;
-    facebookSession.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
+function configureFacebookSession(ses) {
+  if (!guardedFacebookSessions.has(ses)) {
+    guardedFacebookSessions.add(ses);
+    ses.webRequest.onBeforeRequest({ urls: ['*://*/*'] }, (details, callback) => {
       callback({ cancel: !isAllowedFacebookUrl(details.url) });
     });
-    facebookSession.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
-    facebookSession.on('will-download', (event) => event.preventDefault());
+    ses.setPermissionRequestHandler((_webContents, _permission, callback) => callback(false));
+    ses.on('will-download', (event) => event.preventDefault());
+  }
+  return ses;
+}
+
+function getFacebookSession() {
+  if (!facebookSession) {
+    facebookSession = configureFacebookSession(session.fromPartition(FACEBOOK_PARTITION));
   }
   return facebookSession;
+}
+
+function getBatchFacebookSession(workerId) {
+  return configureFacebookSession(session.fromPartition(`${FACEBOOK_PARTITION}-batch-${workerId}`));
 }
 
 // Tắt auto download mặc định, chỉ khi user bấm
@@ -66,6 +77,7 @@ autoUpdater.autoInstallOnAppQuit = true;
 
 let mainWindow = null;
 let hiddenFbWindow = null;
+const batchWorkers = [];
 let isBatchRunning = false;
 let shouldStopBatch = false;
 let windowReady = false;
@@ -109,8 +121,7 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit();
 });
 
-async function getAllFacebookCookies() {
-  const ses = getFacebookSession();
+async function getAllFacebookCookies(ses = getFacebookSession()) {
   try {
     const cookies = await ses.cookies.get({});
     return cookies.filter(cookie => isAllowedDomain(cookie.domain, FACEBOOK_COOKIE_DOMAINS));
@@ -119,19 +130,18 @@ async function getAllFacebookCookies() {
   }
 }
 
-async function clearAllFacebookCookies() {
-  const cookies = await getAllFacebookCookies();
+async function clearAllFacebookCookies(ses = getFacebookSession()) {
+  const cookies = await getAllFacebookCookies(ses);
   for (const cookie of cookies) {
     const domain = cookie.domain.startsWith('.') ? cookie.domain.slice(1) : cookie.domain;
     try {
-      await getFacebookSession().cookies.remove(`https://${domain}${cookie.path || '/'}`, cookie.name);
+      await ses.cookies.remove(`https://${domain}${cookie.path || '/'}`, cookie.name);
     } catch (e) {}
   }
   return cookies.length;
 }
 
-async function setCookiesList(cookies) {
-  const ses = getFacebookSession();
+async function setCookiesList(cookies, ses = getFacebookSession()) {
   let success = 0;
   let rejected = 0;
   let failed = 0;
@@ -346,9 +356,58 @@ async function ensureHiddenWindow() {
   return hiddenFbWindow;
 }
 
+async function ensureBatchWorker(workerId) {
+  let worker = batchWorkers[workerId];
+  if (worker && worker.win && !worker.win.isDestroyed()) return worker;
+
+  const partition = `${FACEBOOK_PARTITION}-batch-${workerId}`;
+  worker = {
+    id: workerId,
+    ses: getBatchFacebookSession(workerId),
+    win: null
+  };
+
+  worker.win = new BrowserWindow({
+    width: 1100,
+    height: 800,
+    show: false,
+    webPreferences: {
+      partition,
+      nodeIntegration: false,
+      contextIsolation: true,
+      sandbox: true,
+      webviewTag: false,
+      backgroundThrottling: false,
+      images: true,
+      javascript: true
+    }
+  });
+
+  worker.win.webContents.on('will-navigate', (event, url) => {
+    if (!isAllowedFacebookUrl(url)) event.preventDefault();
+  });
+
+  worker.win.webContents.setWindowOpenHandler(({ url }) => {
+    if (isAllowedFacebookUrl(url)) {
+      setImmediate(() => {
+        if (worker.win && !worker.win.isDestroyed()) worker.win.loadURL(url).catch(() => {});
+      });
+    }
+    return { action: 'deny' };
+  });
+
+  worker.win.on('closed', () => {
+    worker.win = null;
+    batchWorkers[workerId] = null;
+  });
+
+  batchWorkers[workerId] = worker;
+  return worker;
+}
+
 // ===== LẤY TOKEN NHANH =====
-async function fetchTokenFast() {
-  const win = await ensureHiddenWindow();
+async function fetchTokenFast(targetWindow = null, entryUrl = FACEBOOK_ENTRY_URL) {
+  const win = targetWindow || await ensureHiddenWindow();
 
   return new Promise(async (resolve) => {
     let done = false;
@@ -389,7 +448,7 @@ async function fetchTokenFast() {
     win.webContents.once('did-finish-load', onLoad);
 
     try {
-      await win.loadURL(FACEBOOK_ENTRY_URL, { extraHeaders: 'pragma: no-cache\n' });
+      await win.loadURL(entryUrl, { extraHeaders: 'pragma: no-cache\n' });
     } catch (e) {
       finish({
         success: false,
@@ -545,12 +604,26 @@ ipcMain.handle('parse-account-file', async (e, filePath) => {
   }
 });
 
-async function runBatch(filePath, parseFile, mode) {
+function normalizeBatchOptions(options) {
+  const secondWorkerEnabled = options && options.secondWorkerEnabled === true;
+  if (!secondWorkerEnabled) {
+    return { secondWorkerEnabled: false, secondWorkerUrl: FACEBOOK_ENTRY_URL };
+  }
+
+  const secondWorkerUrl = String(options.secondWorkerUrl || '').trim();
+  if (!isAllowedFacebookUrl(secondWorkerUrl)) {
+    throw new Error('Link của luồng thứ 2 phải là liên kết HTTPS thuộc Facebook');
+  }
+  return { secondWorkerEnabled: true, secondWorkerUrl };
+}
+
+async function runBatch(filePath, parseFile, mode, options) {
   if (isBatchRunning) return { success: false, error: 'Đang chạy' };
   isBatchRunning = true;
   shouldStopBatch = false;
 
   try {
+    const batchOptions = normalizeBatchOptions(options);
     const items = parseFile(fs.readFileSync(filePath, 'utf8'));
     if (!items.length) {
       isBatchRunning = false;
@@ -560,23 +633,25 @@ async function runBatch(filePath, parseFile, mode) {
       };
     }
 
-    sendToRenderer('batch-start', { total: items.length, mode });
-    // Pre-create window
-    await ensureHiddenWindow();
+    const requestedWorkerCount = batchOptions.secondWorkerEnabled ? BATCH_CONCURRENCY : 1;
+    const workerCount = Math.min(requestedWorkerCount, items.length);
+    sendToRenderer('batch-start', { total: items.length, mode, workerCount });
+    const workers = await Promise.all(
+      Array.from({ length: workerCount }, (_, index) => ensureBatchWorker(index))
+    );
 
     let authenticatedCount = 0, tokenCount = 0, failCount = 0, processedCount = 0;
     const tokens = [];
+    let nextIndex = 0;
 
-    for (let i = 0; i < items.length; i++) {
-      if (shouldStopBatch) break;
-
+    async function processItem(worker, i) {
       const item = items[i];
       processedCount++;
       sendToRenderer('batch-progress', {
-        current: i + 1,
+        current: processedCount,
         total: items.length,
         mode,
-        message: `Đang xử lý ${i + 1}/${items.length}${item.uid ? ` | UID: ${item.uid}` : ''}`
+        message: `Worker ${worker.id + 1}: đang xử lý dòng ${i + 1}/${items.length}${item.uid ? ` | UID: ${item.uid}` : ''}`
       });
 
       if (item.type === 'invitation' || item.type === 'invalid-account' ||
@@ -593,7 +668,7 @@ async function runBatch(filePath, parseFile, mode) {
           index: i + 1, status: 'fail',
           message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | ${reason}`
         });
-        continue;
+        return;
       }
 
       const cookieNames = new Set(item.cookies.map(cookie => String(cookie.name || '').trim().toLowerCase()));
@@ -605,18 +680,19 @@ async function runBatch(filePath, parseFile, mode) {
           status: 'fail',
           message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | Cookie thiếu ${missing.join(' và ')}`
         });
-        continue;
+        return;
       }
 
-      await clearAllFacebookCookies();
-      const setResult = await setCookiesList(item.cookies);
+      await clearAllFacebookCookies(worker.ses);
+      const setResult = await setCookiesList(item.cookies, worker.ses);
       if (setResult.success === 0) {
         failCount++;
         sendToRenderer('batch-line', { index: i + 1, status: 'fail', message: `[${i + 1}] Không set được cookie` });
-        continue;
+        return;
       }
 
-      const result = await fetchTokenFast();
+      const entryUrl = worker.id === 1 ? batchOptions.secondWorkerUrl : FACEBOOK_ENTRY_URL;
+      const result = await fetchTokenFast(worker.win, entryUrl);
 
       if (result.authenticated) {
         authenticatedCount++;
@@ -651,10 +727,18 @@ async function runBatch(filePath, parseFile, mode) {
           message: `[${i + 1}] FAIL${item.uid ? ` | UID: ${item.uid}` : ''} | ${reason}`
         });
       }
-
-      // Nghỉ rất ngắn
-      await new Promise(r => setTimeout(r, 200));
     }
+
+    async function runWorker(worker) {
+      while (!shouldStopBatch) {
+        const i = nextIndex++;
+        if (i >= items.length) return;
+        await processItem(worker, i);
+        if (!shouldStopBatch) await new Promise(resolve => setTimeout(resolve, 200));
+      }
+    }
+
+    await Promise.all(workers.map(runWorker));
 
     isBatchRunning = false;
     const stopped = shouldStopBatch && processedCount < items.length;
@@ -666,7 +750,7 @@ async function runBatch(filePath, parseFile, mode) {
       fail: failCount,
       stopped,
       mode,
-      tokens
+      tokens: tokens.filter(Boolean)
     });
     return {
       success: true,
@@ -683,11 +767,11 @@ async function runBatch(filePath, parseFile, mode) {
   }
 }
 
-ipcMain.handle('start-batch', async (e, filePath) =>
-  await runBatch(filePath, parseMultipleCookiesFromText, 'cookie'));
+ipcMain.handle('start-batch', async (e, filePath, options) =>
+  await runBatch(filePath, parseMultipleCookiesFromText, 'cookie', options));
 
-ipcMain.handle('start-account-batch', async (e, filePath) =>
-  await runBatch(filePath, parseAccountCookieFile, 'account'));
+ipcMain.handle('start-account-batch', async (e, filePath, options) =>
+  await runBatch(filePath, parseAccountCookieFile, 'account', options));
 
 ipcMain.handle('stop-batch', async () => {
   shouldStopBatch = true;

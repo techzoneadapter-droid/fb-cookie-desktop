@@ -7,11 +7,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
   copyText: (text) => ipcRenderer.invoke('copy-text', text),
   selectCookieFile: () => ipcRenderer.invoke('select-cookie-file'),
   parseCookieFile: (path) => ipcRenderer.invoke('parse-cookie-file', path),
-  startBatch: (path) => ipcRenderer.invoke('start-batch', path),
+  startBatch: (path, options) => ipcRenderer.invoke('start-batch', path, options),
   stopBatch: () => ipcRenderer.invoke('stop-batch'),
   selectAccountFile: () => ipcRenderer.invoke('select-account-file'),
   parseAccountFile: (path) => ipcRenderer.invoke('parse-account-file', path),
-  startAccountBatch: (path) => ipcRenderer.invoke('start-account-batch', path),
+  startAccountBatch: (path, options) => ipcRenderer.invoke('start-account-batch', path, options),
   stopAccountBatch: () => ipcRenderer.invoke('stop-account-batch'),
 
   getAppVersion: () => ipcRenderer.invoke('get-app-version'),

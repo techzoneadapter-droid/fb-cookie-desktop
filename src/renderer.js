@@ -24,10 +24,63 @@ const clearTokensBtn = document.getElementById('clearTokensBtn');
 const statusEl = document.getElementById('status');
 const uidValue = document.getElementById('uidValue');
 const tokenValue = document.getElementById('tokenValue');
+const secondWorkerToggle = document.getElementById('secondWorkerToggle');
+const secondWorkerConfig = document.getElementById('secondWorkerConfig');
+const secondWorkerUrl = document.getElementById('secondWorkerUrl');
+
+const DEFAULT_FACEBOOK_ENTRY_URL = 'https://adsmanager.facebook.com/adsmanager/manage/campaigns/';
 
 let selectedFilePath = null;
 let selectedAccountFilePath = null;
 let collectedTokens = [];
+
+function saveParallelSettings() {
+  try {
+    localStorage.setItem('secondWorkerEnabled', String(secondWorkerToggle.checked));
+    localStorage.setItem('secondWorkerUrl', secondWorkerUrl.value.trim());
+  } catch (e) {}
+}
+
+function updateParallelSettingsVisibility() {
+  secondWorkerConfig.hidden = !secondWorkerToggle.checked;
+  secondWorkerUrl.disabled = !secondWorkerToggle.checked;
+}
+
+function setParallelControlsDisabled(disabled) {
+  secondWorkerToggle.disabled = disabled;
+  secondWorkerUrl.disabled = disabled || !secondWorkerToggle.checked;
+}
+
+function getBatchOptions() {
+  const enabled = secondWorkerToggle.checked;
+  const rawUrl = secondWorkerUrl.value.trim();
+  if (!enabled) return { secondWorkerEnabled: false };
+
+  let parsed;
+  try {
+    parsed = new URL(rawUrl);
+  } catch (e) {
+    throw new Error('Link của luồng thứ 2 không hợp lệ');
+  }
+  const host = parsed.hostname.toLowerCase();
+  const isFacebook = host === 'facebook.com' || host.endsWith('.facebook.com') ||
+    host === 'fb.com' || host.endsWith('.fb.com');
+  if (parsed.protocol !== 'https:' || !isFacebook) {
+    throw new Error('Luồng thứ 2 chỉ chấp nhận link HTTPS thuộc Facebook');
+  }
+  return { secondWorkerEnabled: true, secondWorkerUrl: parsed.href };
+}
+
+try {
+  secondWorkerToggle.checked = localStorage.getItem('secondWorkerEnabled') === 'true';
+  secondWorkerUrl.value = localStorage.getItem('secondWorkerUrl') || DEFAULT_FACEBOOK_ENTRY_URL;
+} catch (e) {}
+updateParallelSettingsVisibility();
+secondWorkerToggle.addEventListener('change', () => {
+  updateParallelSettingsVisibility();
+  saveParallelSettings();
+});
+secondWorkerUrl.addEventListener('change', saveParallelSettings);
 
 function showStatus(message, type = 'info') {
   statusEl.textContent = message;
@@ -82,7 +135,8 @@ window.electronAPI.onBatchStart((data) => {
   collectedTokens = [];
   tokenArea.value = '';
   tokenCount.textContent = '0';
-  appendLog('===== BẮT ĐẦU ' + (accountMode ? 'BATCH TÀI KHOẢN' : 'BATCH COOKIE') + ': ' + data.total + ' =====');
+  appendLog('===== BẮT ĐẦU ' + (accountMode ? 'BATCH TÀI KHOẢN' : 'BATCH COOKIE') + ': ' + data.total +
+    ' | ' + data.workerCount + ' LUỒNG =====');
   progressBar.classList.toggle('show', !accountMode);
   accountProgressBar.classList.toggle('show', accountMode);
   (accountMode ? accountProgressFill : progressFill).style.width = '0%';
@@ -92,6 +146,7 @@ window.electronAPI.onBatchStart((data) => {
   accountStopBatchBtn.disabled = !accountMode;
   importBtn.disabled = true;
   accountImportBtn.disabled = true;
+  setParallelControlsDisabled(true);
 });
 
 window.electronAPI.onBatchProgress((data) => {
@@ -124,6 +179,7 @@ window.electronAPI.onBatchDone((data) => {
   accountStopBatchBtn.disabled = true;
   importBtn.disabled = false;
   accountImportBtn.disabled = false;
+  setParallelControlsDisabled(false);
   showStatus(
     (data.stopped ? 'Đã dừng' : 'Batch xong') + ': ' + data.authenticated + ' đăng nhập, ' + data.success + ' token',
     data.authenticated > 0 ? 'success' : 'error'
@@ -207,7 +263,15 @@ importBtn.addEventListener('click', async () => {
 startBatchBtn.addEventListener('click', async () => {
   if (!selectedFilePath) return;
   logArea.value = '';
-  const result = await window.electronAPI.startBatch(selectedFilePath);
+  let options;
+  try {
+    options = getBatchOptions();
+    saveParallelSettings();
+  } catch (err) {
+    showStatus(err.message, 'error');
+    return;
+  }
+  const result = await window.electronAPI.startBatch(selectedFilePath, options);
   if (!result.success && result.error) {
     showStatus(result.error, 'error');
     startBatchBtn.disabled = !selectedFilePath;
@@ -216,6 +280,7 @@ startBatchBtn.addEventListener('click', async () => {
     accountStopBatchBtn.disabled = true;
     importBtn.disabled = false;
     accountImportBtn.disabled = false;
+    setParallelControlsDisabled(false);
   }
 });
 
@@ -243,7 +308,15 @@ accountImportBtn.addEventListener('click', async () => {
 accountStartBatchBtn.addEventListener('click', async () => {
   if (!selectedAccountFilePath) return;
   logArea.value = '';
-  const result = await window.electronAPI.startAccountBatch(selectedAccountFilePath);
+  let options;
+  try {
+    options = getBatchOptions();
+    saveParallelSettings();
+  } catch (err) {
+    showStatus(err.message, 'error');
+    return;
+  }
+  const result = await window.electronAPI.startAccountBatch(selectedAccountFilePath, options);
   if (!result.success && result.error) {
     showStatus(result.error, 'error');
     startBatchBtn.disabled = !selectedFilePath;
@@ -252,6 +325,7 @@ accountStartBatchBtn.addEventListener('click', async () => {
     accountStopBatchBtn.disabled = true;
     importBtn.disabled = false;
     accountImportBtn.disabled = false;
+    setParallelControlsDisabled(false);
   }
 });
 
